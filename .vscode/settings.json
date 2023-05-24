@@ -1,0 +1,12 @@
+{
+    "python.linting.mypyEnabled": true,
+    // runs pylance in basic mode, because mypy is gonna do most of the work
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingTypeStubs": "none"
+        // annoying because it makes .relative imports throw errors
+        // "reportImportCycles": "none"
+    },
+    "python.analysis.inlayHints.variableTypes": false,
+    "python.analysis.inlayHints.functionReturnTypes": false
+}
