@@ -17,11 +17,13 @@ from tdvutil.argparse import CheckFile
 # SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
 
-
-ONG_SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/14ARzE_zSMNhp0ZQV34ti2741PbA-5wAjsXRAW8EgJ-4/edit?ts=5a3893f5#gid=0'
-ONG_SPREADSHEET_ID = '14ARzE_zSMNhp0ZQV34ti2741PbA-5wAjsXRAW8EgJ-4'
+# Sure, we could take these as config values or arguments or something,
+# but... why?
+ONG_SPREADSHEET_ID = "14ARzE_zSMNhp0ZQV34ti2741PbA-5wAjsXRAW8EgJ-4"
+ONG_SPREADSHEET_URL = f"https://docs.google.com/spreadsheets/d/{ONG_SPREADSHEET_ID}/edit"
 ONG_RANGE_NAME = 'Songs!A2:I'
 
+# column offsets for the various onglog fields
 class Col(IntEnum):
     FIRST = 0
     DATE = 0
@@ -39,6 +41,9 @@ class Col(IntEnum):
 # Convert seconds to HH:MM:SS.SSS format. Sure, this could use strftime
 # or datetime.timedelta, but both of those have their own issues when
 # you want a consistent format involving milliseconds.
+#
+# This is stolen from tdvutils and tweaked to be what we want; we should
+# roll some of those changes back into tdvutil
 def sec_to_hms(secs: float) -> str:
     hours = int(secs // (60 * 60))
     secs %= (60 * 60)
@@ -56,10 +61,15 @@ def sec_to_hms(secs: float) -> str:
     ret += f"{minutes:02d}:{secs:02d}"
     return ret
 
+
+# stupid simple filename normalization
+# FIXME: do better
 def normalize_filename(name: str) -> str:
     return re.sub(r"\s*:\s*", " - ", name)
 
-# helper function to validate and parse a provided time string
+
+# helper function to validate and parse a provided time string, and
+# raise an appropriate argparse exception if we fail.
 def offset_str(arg_value: str) -> float:
     offset_re = re.compile(r"^(\d+:)?(\d+:)?(\d+)(\.\d+)?$")
 
@@ -70,7 +80,8 @@ def offset_str(arg_value: str) -> float:
     return hms_to_sec(arg_value)
 
 
-def parse_arguments(argv: List[str]):
+# Argument parsing (I know, shocking)
+def parse_arguments(argv: List[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Split a video file based on timestamps in the onglog",
         allow_abbrev=True,
@@ -99,7 +110,6 @@ def parse_arguments(argv: List[str]):
     #     help="Enable debugging output",
     # )
 
-
     # positional arguments
     parser.add_argument(
         "lineno",
@@ -107,15 +117,6 @@ def parse_arguments(argv: List[str]):
         # nargs="1",
         help="line number starting the appropriate line in the onglog"
     )
-
-    # parser.add_argument(
-    #     "file",
-    #     type=Path,
-    #     action=CheckFile(must_exist=True),
-    #     # default=Path("training.log"),
-    #     # nargs="1",
-    #     help="video file to split",
-    # )
 
     parsed_args = parser.parse_args(argv)
     return parsed_args
@@ -127,106 +128,96 @@ def main(argv: List[str]) -> int:
     # gc = gspread.oauth(scopes=gspread.auth.READONLY_SCOPES)
     gc = gspread.service_account(filename=args.credsfile)
 
-    start_time = gc.open_by_url(ONG_SPREADSHEET_URL)
-    ws = start_time.worksheet("Songs")
+    onglog = gc.open_by_url(ONG_SPREADSHEET_URL)
+    ws = onglog.worksheet("Songs")
 
+    # This gets a list of all rows that start a new onglog chunk. This
+    # is from some old code, we probably don't need it anymore now that
+    # we're having the user explicitly specify a line number.
+    # FIXME: figure out if we can do better
+    #
     # Annoyingly, the gsheets interface has columns 1-based instead of 0-based
     cell_list = ws.findall("0", in_column=Col.ORDER + 1)
-    # print([x.row for x in cell_list])
-    # print(f"{len(cell_list)} stream start markers")
 
-    # penultimate_row = cell_list[-2].row
-    # last_row = cell_list[-1].row - 1
-    # print("Last spreadsheet segment: %d to %d" % (penultimate_row, last_row))
-
-    # Start at the end, work backwards until we find our row
+    # Start at the end, work backwards until we find our matching stream
+    # start, then save the line numbers
     for i in range(len(cell_list) - 1, 0, -1):
-        # print("checking index %d, holds row %d" % (i, cell_list[i].row))
         if cell_list[i].row == args.lineno:
             first_row = cell_list[i].row + 1
             last_row = cell_list[i + 1].row - 1
             break
     else:
-        print(f"ERROR: Failed to find a show start on line {args.lineno}")
-        sys.exit(1)
+        print(f"ERROR: Failed to find a stream start on line {args.lineno}", file=sys.stderr)
+        return 1  # FIXME: use a proper manifest constant here
 
-    # This should be equivalent, but japparently isn't. Not sure why.
+    # This should be equivalent, but apparently isn't. Not sure why. Leaving
+    # here as a comment to remind me to look into why
     # for i, cell in enumerate(reversed(cell_list)):
     #     if cell.row == SHEET_ROW:
     #         first_row = cell.row + 1
     #         last_row = cell_list[i + 1].row
     #         break
     # else:
-    #     print(f"ERROR: Failed to find a show start on line {SHEET_ROW}")
+    #     print(f"ERROR: Failed to find a stream start on line {SHEET_ROW}")
     #     sys.exit(1)
 
-    # print(f"Using spreadsheet rows {first_row} to {last_row}\n", file=sys.stderr)
-
+    # Get ourselves a chunk of rows to work with
     upleft = gspread.utils.rowcol_to_a1(first_row, Col.FIRST + 1)
     botright = gspread.utils.rowcol_to_a1(last_row, Col.LAST + 1)
     range_query = "%s:%s" % (upleft, botright)
 
-    # ffmpeg_cmd = ["ffmpeg", "-y", "-i", str(args.file)]
-
-    # rows = ws.range(cell_list[-2].row, 1, cell_list[-1].row, 9)
     rows = ws.get(range_query, major_dimension="ROWS")
 
+    # Output header
     print("\nAPPROXIMATE start times of each segment:\n")
     print("00:00 Stream Start and Warmup")
 
+    # The end time is the date we'll use for the date of the stream. It's
+    # all kind of twisted because Jon is on Australia time, but the OngLog
+    # is kept in US time (EST, I think?). We want to generate the VOD title
+    # and thumbnail based on Jon time, though, so we have to get fancy.
+    # We could do the date math properly if we really want, but in 99%
+    # of cases, just taking the date the stream ended on in the US will give
+    # the date of the stream in Australia, so we just go with that.
     log_end_time = None
 
     for i, row in enumerate(rows):
+        # Parse the start time for a song i onglog-standard (but not gsheets
+        # standard, heh) date format
         log_end_time = dateparser.parse(row[Col.DATE], settings={"DATE_ORDER": "YMD"})
-        # print(f"parsed end date: {log_end_time}")
-        # print(row[Col.TITLE])
-        # lastindex = len(rows) - 1
-        # for i in range(lastindex):
-        # row = rows[i]
-        # print(row)
+
+        # make sure the requestor name was something other than a single "-" or
+        # similar
         if len(row[Col.REQUESTER]) <= 2:
             row[Col.REQUESTER] = "no_user"
 
-        start_time = hms_to_sec(row[Col.UPTIME]) - args.time_offset
-        # if i < (lastindex - 1):
-        if i < len(rows) - 1:
-            end_time = hms_to_sec(rows[i + 1][Col.UPTIME]) - args.time_offset
-        else:
-            end_time = -1
-        # print("i is %d len is %d" % (i, len(rows)))
+        # adjust by our time offset, to allow us to still have proper times
+        # if Jon forgot to star the recording on time
+        onglog = hms_to_sec(row[Col.UPTIME]) - args.time_offset
 
-        # print("Track %02d: %s to %s - %s" % (i, start_time, end_time, row[Col.TITLE]))
-        start_time_hms = sec_to_hms(start_time).replace(".000", "")
+        # figure out when the segment ends
+        # if i < len(rows) - 1:
+        #     end_time = hms_to_sec(rows[i + 1][Col.UPTIME]) - args.time_offset
+        # else:
+        #     end_time = -1
+
+        start_time_hms = sec_to_hms(onglog)
 
         reqby_str = ""
         if row[Col.REQUESTER] != "no_user":
             reqby_str = f" (req'd by {row[Col.REQUESTER]})"
 
+        # Skip tier 3 resub songs when making timestamps. Ideally we'd
+        # auto-skip warmup songs and such as well, but we don't have a
+        # really good way to identify those.
         if len(row) > Col.LINKS and "tier 3" in row[Col.LINKS].lower():
             continue
 
+        # generate the actual output
         print(f"{start_time_hms} {row[Col.TITLE]}{reqby_str}")
-        # end_time_hms = sec_to_hms(end_time) if end_time > 0 else "end"
-        # print(f"Track {i}: {start_time_hms} to {end_time_hms} - {row[Col.TITLE]}")
-        # ffmpeg_cmd.extend(["-ss", start_time_hms])
-        # # if end_time_hms != "end":
-        # #     ffmpeg_cmd.extend(["-to", rows[i + 1][Col.UPTIME]])
-        # if end_time_hms != "end":
-        #     ffmpeg_cmd.extend(["-to", end_time_hms])
-        # ffmpeg_cmd.extend(["-c", "copy"])
-        # ffmpeg_cmd.extend(["-sn", "%s - %s.mp4" %
-        #                   (row[Col.ORDER], normalize_filename(row[Col.TITLE]))])
 
-        # print(row[3])
-        # print("%s - %s - %s - \"%s\" %s" % (row[2], row[1], row[3], row[4], row[6]))
-        # print(row[0])
-        # print(":::")
-        # print("entry %d - %s" % (i, " ".join(ffmpeg_cmd)))
-    # row = rows[8]
-    # pprint(row)
-    # print("executing: " + " ".join(ffmpeg_cmd))
-    # subprocess.run(ffmpeg_cmd)
-
+    # If we have a date for the stream, generate a title line for it, and
+    # generate a thumbnail
     if log_end_time is not None:
         # Sucks we have to go through these gymnastics to get the date formatted
         # the way we want, because somehow there's not a strftime substitution
@@ -249,8 +240,10 @@ def main(argv: List[str]) -> int:
         subprocess.run(["python3", "mkthumbnail.py", datestr])
 
 
-
 if __name__ == "__main__":
+    # make sure our output streams are properly encoded so that we can
+    # not screw up Frédéric Chopin's name and such.
     sys.stdout = io.TextIOWrapper(sys.stdout.detach(), encoding="utf-8")
     sys.stderr = io.TextIOWrapper(sys.stderr.detach(), encoding="utf-8")
+
     sys.exit(main(sys.argv))
