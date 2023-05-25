@@ -10,6 +10,7 @@ from typing import List
 
 import dateparser
 import gspread
+from PIL import Image, ImageDraw, ImageFont
 from tdvutil import hms_to_sec
 from tdvutil.argparse import CheckFile
 
@@ -78,6 +79,19 @@ def offset_str(arg_value: str) -> float:
 
     # else
     return hms_to_sec(arg_value)
+
+
+def mkthumbnail(date: str, fontfile="mtcorsva_0.ttf", center_x=606, baseline=650, size=220, color="#fe9a0d") -> None:
+    img = Image.open("thumbnail_template.png")
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(fontfile, size)
+
+    size_x = draw.textlength(date, font=font)
+    centering_x = center_x - (size_x / 2)
+
+    draw.text((centering_x, baseline), date, font=font, fill=color)
+    # img.show()
+    img.save(f"{date}.jpg", quality=95)
 
 
 # Argument parsing (I know, shocking)
@@ -237,7 +251,9 @@ def main(argv: List[str]) -> int:
 
         datestr = log_end_time.strftime("%Y-%m-%d")
         print(f"\nGenerating thumbnail for date: {datestr}")
-        subprocess.run(["python3", "mkthumbnail.py", datestr])
+        mkthumbnail(datestr)
+
+    return 0
 
 
 if __name__ == "__main__":
