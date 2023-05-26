@@ -158,7 +158,14 @@ def main(argv: List[str]) -> int:
     for i in range(len(cell_list) - 1, 0, -1):
         if cell_list[i].row == args.lineno:
             first_row = cell_list[i].row + 1
-            last_row = cell_list[i + 1].row - 1
+
+            # If this is the last chunk (and there's not, effectively, a null
+            # chunk after the one we're caring about), pick an unreasonable max
+            # size for the chunk and use that. There's probably a better way.
+            if i >= len(cell_list) - 1:
+                last_row = first_row + 500
+            else:
+                last_row = cell_list[i + 1].row - 1
             break
     else:
         print(f"ERROR: Failed to find a stream start on line {args.lineno}", file=sys.stderr)
@@ -197,8 +204,11 @@ def main(argv: List[str]) -> int:
 
     for i, row in enumerate(rows):
         # Parse the start time for a song i onglog-standard (but not gsheets
-        # standard, heh) date format
-        log_end_time = dateparser.parse(row[Col.DATE], settings={"DATE_ORDER": "YMD"})
+        # standard, heh) date format. Skip rows without a parsable timestamp.
+        ts = dateparser.parse(row[Col.DATE], settings={"DATE_ORDER": "YMD"})
+        if ts is None:
+            continue
+        log_end_time = ts
 
         # make sure the requestor name was something other than a single "-" or
         # similar
@@ -216,6 +226,9 @@ def main(argv: List[str]) -> int:
         #     end_time = -1
 
         start_time_hms = sec_to_hms(onglog)
+
+        if len(row) <= Col.TITLE or not row[Col.TITLE]:
+            continue
 
         reqby_str = ""
         if row[Col.REQUESTER] != "no_user":
