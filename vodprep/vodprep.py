@@ -193,6 +193,11 @@ def main(argv: List[str]) -> int:
     print("\nAPPROXIMATE start times of each segment:\n")
     print("00:00 Stream Start and Warmup")
 
+    # if we're in a concert grand segment (which means we ignore entries
+    # until we hit the end or run into something that isn't piano)
+    in_concert_grand = False
+    has_concert_grand = False
+
     # The end time is the date we'll use for the date of the stream. It's
     # all kind of twisted because Jon is on Australia time, but the OngLog
     # is kept in US time (EST, I think?). We want to generate the VOD title
@@ -240,6 +245,19 @@ def main(argv: List[str]) -> int:
         if len(row) > Col.LINKS and "tier 3" in row[Col.LINKS].lower():
             continue
 
+        if not in_concert_grand:
+            if len(row) > Col.LINKS and "concert grand" in row[Col.LINKS].lower():
+                in_concert_grand = True
+                has_concert_grand = True
+                print(f"{start_time_hms} Concert Grand")
+                continue
+        else:
+            # in concert grand, see if we should exit
+            if len(row) > Col.TYPE and "piano" in row[Col.TYPE].lower():
+                continue
+            else:
+                in_concert_grand = False
+
         # generate the actual output
         print(f"{start_time_hms} {row[Col.TITLE]}{reqby_str}")
 
@@ -259,7 +277,8 @@ def main(argv: List[str]) -> int:
 
         monthname = log_end_time.strftime("%B")
 
-        titlestr = f"VOD for the {log_end_time.day}{daysuffix} of {monthname} {log_end_time.year}"
+        grandstr = " (incl. Concert Grand)" if has_concert_grand else ""
+        titlestr = f"VOD for the {log_end_time.day}{daysuffix} of {monthname} {log_end_time.year}{grandstr}"
         print(f"\n\nTITLE: {titlestr}")
 
         datestr = log_end_time.strftime("%Y-%m-%d")
