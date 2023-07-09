@@ -81,8 +81,8 @@ def offset_str(arg_value: str) -> float:
     return hms_to_sec(arg_value)
 
 
-def mkthumbnail(date: str, fontfile="mtcorsva_0.ttf", center_x=606, baseline=650, size=220, color="#fe9a0d") -> None:
-    img = Image.open("thumbnail_template.png")
+def mkthumbnail(date: str, background="thumbnail_template.png", fontfile="mtcorsva_0.ttf", center_x=606, baseline=650, size=220, color="#fe9a0d") -> None:
+    img = Image.open(background)
     draw = ImageDraw.Draw(img)
     font = ImageFont.truetype(fontfile, size)
 
@@ -123,6 +123,13 @@ def parse_arguments(argv: List[str]) -> argparse.Namespace:
     #     default=False,
     #     help="Enable debugging output",
     # )
+
+    parser.add_argument(
+        "--concert-grand", "--cg",
+        default=False,
+        action='store_true',
+        help="Treat stream as timer'd concert grand scene",
+    )
 
     # positional arguments
     parser.add_argument(
@@ -277,13 +284,24 @@ def main(argv: List[str]) -> int:
 
         monthname = log_end_time.strftime("%B")
 
-        grandstr = " (incl. Concert Grand)" if has_concert_grand else ""
+        if args.concert_grand:
+            grandstr = " (Timer'd Concert Grand Stream)"
+        elif has_concert_grand:
+            grandstr = " (incl. Concert Grand)"
+        else:
+            grandstr = ""
+
         titlestr = f"VOD for the {log_end_time.day}{daysuffix} of {monthname} {log_end_time.year}{grandstr}"
         print(f"\n\nTITLE: {titlestr}")
 
         datestr = log_end_time.strftime("%Y-%m-%d")
         print(f"\nGenerating thumbnail for date: {datestr}")
-        mkthumbnail(datestr)
+
+        if args.concert_grand:
+            mkthumbnail(background="thumbnail_concertgrand_template.png",
+                        date=datestr, center_x=960)
+        else:
+            mkthumbnail(background="thumbnail_template.png", date=datestr, center_x=606)
 
     return 0
 
