@@ -18,11 +18,12 @@ from tdvutil.argparse import CheckFile
 # SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
 
-# Sure, we could take these as config values or arguments or something,
-# but... why?
+# Where to find the onglog. Sure, we could take these as config values or
+# arguments or something, but... why?
 ONG_SPREADSHEET_ID = "14ARzE_zSMNhp0ZQV34ti2741PbA-5wAjsXRAW8EgJ-4"
 ONG_SPREADSHEET_URL = f"https://docs.google.com/spreadsheets/d/{ONG_SPREADSHEET_ID}/edit"
 ONG_RANGE_NAME = 'Songs!A2:I'
+
 
 # column offsets for the various onglog fields
 class Col(IntEnum):
@@ -157,7 +158,8 @@ def main(argv: List[str]) -> int:
     # we're having the user explicitly specify a line number.
     # FIXME: figure out if we can do better
     #
-    # Annoyingly, the gsheets interface has columns 1-based instead of 0-based
+    # Annoyingly, the gsheets interface has columns 1-based instead of 0-based,
+    # so we'll see all sorts of "Col.SOMETHING + 1" type constructs in this code
     cell_list = ws.findall("0", in_column=Col.ORDER + 1)
 
     # Start at the end, work backwards until we find our matching stream
@@ -176,18 +178,7 @@ def main(argv: List[str]) -> int:
             break
     else:
         print(f"ERROR: Failed to find a stream start on line {args.lineno}", file=sys.stderr)
-        return 1  # FIXME: use a proper manifest constant here
-
-    # This should be equivalent, but apparently isn't. Not sure why. Leaving
-    # here as a comment to remind me to look into why
-    # for i, cell in enumerate(reversed(cell_list)):
-    #     if cell.row == SHEET_ROW:
-    #         first_row = cell.row + 1
-    #         last_row = cell_list[i + 1].row
-    #         break
-    # else:
-    #     print(f"ERROR: Failed to find a stream start on line {SHEET_ROW}")
-    #     sys.exit(1)
+        return 1  # FIXME: use a proper constant here
 
     # Get ourselves a chunk of rows to work with
     upleft = gspread.utils.rowcol_to_a1(first_row, Col.FIRST + 1)
@@ -205,17 +196,17 @@ def main(argv: List[str]) -> int:
     in_concert_grand = False
     has_concert_grand = False
 
-    # The end time is the date we'll use for the date of the stream. It's
-    # all kind of twisted because Jon is on Australia time, but the OngLog
-    # is kept in US time (EST, I think?). We want to generate the VOD title
-    # and thumbnail based on Jon time, though, so we have to get fancy.
+    # The stream end time is the date we'll use for the date of the stream.
+    # It's all kind of twisted because Jon is on Australia time, but the
+    # OngLog is kept in US time (EST, I think?). We want to generate the VOD
+    # title and thumbnail based on Jon time, though, so we have to get fancy.
     # We could do the date math properly if we really want, but in 99%
-    # of cases, just taking the date the stream ended on in the US will give
+    # of cases, just taking the date the stream ended in the US will give
     # the date of the stream in Australia, so we just go with that.
     log_end_time = None
 
     for i, row in enumerate(rows):
-        # Parse the start time for a song i onglog-standard (but not gsheets
+        # Parse the start time for a song in onglog-standard (but not gsheets
         # standard, heh) date format. Skip rows without a parsable timestamp.
         ts = dateparser.parse(row[Col.DATE], settings={"DATE_ORDER": "YMD"})
         if ts is None:
@@ -228,14 +219,8 @@ def main(argv: List[str]) -> int:
             row[Col.REQUESTER] = "no_user"
 
         # adjust by our time offset, to allow us to still have proper times
-        # if Jon forgot to star the recording on time
+        # if Jon forgot to start the recording on time
         onglog = hms_to_sec(row[Col.UPTIME]) - args.time_offset
-
-        # figure out when the segment ends
-        # if i < len(rows) - 1:
-        #     end_time = hms_to_sec(rows[i + 1][Col.UPTIME]) - args.time_offset
-        # else:
-        #     end_time = -1
 
         start_time_hms = sec_to_hms(onglog)
 
@@ -259,7 +244,7 @@ def main(argv: List[str]) -> int:
                 print(f"{start_time_hms} Concert Grand")
                 continue
         else:
-            # in concert grand, see if we should exit
+            # if we're in a concert grand segment, see if we should exit
             if len(row) > Col.TYPE and "piano" in row[Col.TYPE].lower():
                 continue
             else:
@@ -267,6 +252,7 @@ def main(argv: List[str]) -> int:
 
         # generate the actual output
         print(f"{start_time_hms} {row[Col.TITLE]}{reqby_str}")
+
 
     # If we have a date for the stream, generate a title line for it, and
     # generate a thumbnail
@@ -276,7 +262,6 @@ def main(argv: List[str]) -> int:
         # for a day of month without a leading zero, nor is there one that will
         # automatically handle the "1st", "2nd", and "3rd" prefixes. Wonder if
         # there's a module that handles that better
-        # log_end_time = datetime(2023, 1, 1)
         if 4 <= log_end_time.day <= 20 or 24 <= log_end_time.day <= 30:
             daysuffix = "th"
         else:
