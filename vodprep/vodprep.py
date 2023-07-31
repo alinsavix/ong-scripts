@@ -14,8 +14,8 @@ from PIL import Image, ImageDraw, ImageFont
 from tdvutil import hms_to_sec
 from tdvutil.argparse import CheckFile
 
-# If modifying these scopes, delete the file token.pickle.
-# SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+# NOTE: You will need to set up a file with your google cloud credentials
+# as noted in the documentation for the "gspread" module
 
 
 # Where to find the onglog. Sure, we could take these as config values or
@@ -24,6 +24,8 @@ ONG_SPREADSHEET_ID = "14ARzE_zSMNhp0ZQV34ti2741PbA-5wAjsXRAW8EgJ-4"
 ONG_SPREADSHEET_URL = f"https://docs.google.com/spreadsheets/d/{ONG_SPREADSHEET_ID}/edit"
 ONG_RANGE_NAME = 'Songs!A2:I'
 
+# If modifying these scopes, delete the file token.pickle.
+# SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
 # column offsets for the various onglog fields
 class Col(IntEnum):
