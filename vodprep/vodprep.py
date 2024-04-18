@@ -211,7 +211,7 @@ def main(argv: List[str]) -> int:
         # Parse the start time for a song in onglog-standard (but not gsheets
         # standard, heh) date format. Skip rows without a parsable timestamp.
         ts = dateparser.parse(row[Col.DATE], settings={"DATE_ORDER": "YMD"})
-        if ts is None:
+        if ts is None or len(row) < Col.UPTIME or not row[Col.UPTIME]:
             continue
         log_end_time = ts
 
@@ -222,7 +222,7 @@ def main(argv: List[str]) -> int:
 
         # adjust by our time offset, to allow us to still have proper times
         # if Jon forgot to start the recording on time
-        onglog = hms_to_sec(row[Col.UPTIME]) - args.time_offset
+        onglog = hms_to_sec(row[Col.UPTIME]) + args.time_offset
 
         start_time_hms = sec_to_hms(onglog)
 
@@ -239,18 +239,19 @@ def main(argv: List[str]) -> int:
         if len(row) > Col.LINKS and "tier 3" in row[Col.LINKS].lower():
             continue
 
-        if not in_concert_grand:
-            if len(row) > Col.LINKS and "concert grand" in row[Col.LINKS].lower():
-                in_concert_grand = True
-                has_concert_grand = True
-                print(f"{start_time_hms} Concert Grand")
-                continue
-        else:
-            # if we're in a concert grand segment, see if we should exit
-            if len(row) > Col.TYPE and "piano" in row[Col.TYPE].lower():
-                continue
+        if not args.concert_grand:
+            if not in_concert_grand:
+                if len(row) > Col.LINKS and "concert grand" in row[Col.LINKS].lower():
+                    in_concert_grand = True
+                    has_concert_grand = True
+                    print(f"{start_time_hms} Concert Grand")
+                    continue
             else:
-                in_concert_grand = False
+                # if we're in a concert grand segment, see if we should exit
+                if len(row) > Col.TYPE and "piano" in row[Col.TYPE].lower():
+                    continue
+                else:
+                    in_concert_grand = False
 
         # generate the actual output
         print(f"{start_time_hms} {row[Col.TITLE]}{reqby_str}")
