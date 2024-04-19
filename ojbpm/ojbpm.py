@@ -115,10 +115,10 @@ for msg in p:
         # print(mido.format_as_string(msg))
         # print(t, "SYSEX", "".join('%02x' % i for i in msg.data), file=parsed_out)
         sysex_str = "".join('%02x' % i for i in msg.data)
-        # log(f"SYSEX: {sysex_str}")
+        log(f"SYSEX: {sysex_str}")
 
         if current_bpm > 0:
-            loop_length = (msg.data[8] << 7) + msg.data[9]
+            loop_length = ((msg.data[8] & 0x0f) << 4) + (msg.data[9] & 0x0f)
             loop_length_s = (60 / current_bpm) * 4 * loop_length
             # log(f"maj/min: {msg.data[8]}/{msg.data[9]} == {loop_length}")
             if loop_length > 0:
