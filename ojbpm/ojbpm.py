@@ -8,7 +8,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Literal, Optional, TypeVar
+from typing import Any, Dict, Iterable, List, Literal, Optional, TypeVar
 
 import mido
 from tdvutil import ppretty
@@ -70,13 +70,41 @@ def init_state(statefile: Optional[Path]) -> LoopState:
         if time.time() > (state.updated_t + (15 * 60)):
             log("SAVED STATE IGNORED (too old)")
             return LoopState()
-
-        # else
-        log(f"SAVED STATE LOADED (from {statefile})")
-        return state
+        else:
+            log(f"SAVED STATE LOADED (from {statefile})")
+            return state
     except Exception as e:
         log(f"SAVED STATE NOT AVAILABLE ({e})")
         return LoopState()
+
+# I haven't quite decided what the *best* way to do this is, but I wanted to
+# be able to export some of the data only when it changes, so that very
+# simple bits of code can watch it and take actions when there's a change.
+# This is running on a pi, so want to make things as small and compact as
+# possible, especially for memory, and exporting like this requires very
+# little code to be able to read it back.
+#
+# There's a 50% chance I'll throw this out later.
+def export_state(export_dir: Optional[Path], ls: LoopState) -> None:
+    if export_dir is None:
+        return
+
+    export_single(export_dir, "playback_state", ls.playback_state)
+    export_single(export_dir, "looper_slot", ls.looper_slot)
+    export_single(export_dir, "current_bpm", str(ls.current_bpm))
+
+
+last_exports: Dict[str, Any] = {}
+def export_single(export_dir: Path, k: str, v: str) -> None:
+    if last_exports.get(k) == v:
+        return
+
+    last_exports[k] = v
+    export_file = export_dir / f"{k}.txt"
+    export_tmp = export_dir / f"{k}.tmp"
+    export_tmp.write_text(v)
+
+    export_tmp.replace(export_file)
 
 def log(msg: str) -> None:
     now = datetime.now()
@@ -85,7 +113,6 @@ def log(msg: str) -> None:
 
 def h(data: List[bytes]) -> str:
     return "".join('%02x' % i for i in data)
-
 
 T = TypeVar('T')
 def group(iterable: Iterable[T], num) -> Iterable[T]:
@@ -138,6 +165,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Location to persist state during restarts and similar."
+    )
+
+    parser.add_argument(
+        "--export-dir", "--exportdir",
+        type=Path,
+        default=None,
+        help="Location to export state changes for other programs to watch."
     )
 
     return parser.parse_args()
@@ -205,6 +239,7 @@ def main() -> int:
                     lstate.current_bpm = new_bpm
                     log(f"NEW BPM: {lstate.current_bpm:0.1f}")
                     save_state(args.state_file, lstate)
+                    export_state(args.export_dir, lstate)
 
         elif msg.type == "program_change":
             # Changing to a new slot
@@ -213,6 +248,7 @@ def main() -> int:
             clock_tick_count = -20
             log(f"SLOT CHANGE: {lstate.looper_slot}")
             save_state(args.state_file, lstate)
+            export_state(args.export_dir, lstate)
 
         elif msg.type == "start":
             if lstate.playback_state == "STARTED":
@@ -223,6 +259,7 @@ def main() -> int:
                 lstate.playback_start_time = now()
                 log("START")
                 save_state(args.state_file, lstate)
+                export_state(args.export_dir, lstate)
 
         elif msg.type == "stop":
             if lstate.playback_state == "STOPPED":
@@ -232,6 +269,7 @@ def main() -> int:
                 lstate.playback_stop_time = now()
                 log("STOP")
                 save_state(args.state_file, lstate)
+                export_state(args.export_dir, lstate)
 
         elif msg.type == "sysex":
             # Drop the checksum byte
