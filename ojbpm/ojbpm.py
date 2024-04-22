@@ -104,9 +104,9 @@ def export_single(export_dir: Path, k: str, v: str) -> None:
     last_exports[k] = v
     export_file = export_dir / f"{k}.txt"
     export_tmp = export_dir / f"{k}.tmp"
-    export_tmp.write_text(v)
-
-    export_tmp.replace(export_file)
+    # export_tmp.write_text(v)
+    # export_tmp.replace(export_file)
+    export_file.write_text(v)
 
 def log(msg: str) -> None:
     now = datetime.now()
