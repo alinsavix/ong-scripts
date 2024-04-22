@@ -30,6 +30,7 @@ if hasattr(time, "tzset"):
 class LoopState:
     playback_state: Literal["UNKNOWN", "STOPPED", "STARTED"] = "UNKNOWN"
     looper_slot: str = "0-0"
+    loop_length_bars: int = 0
     playback_start_time: float = 0.0
     playback_stop_time: float = 0.0
     current_bpm: float = 0
@@ -55,7 +56,7 @@ def save_state(statefile: Optional[Path], ls: LoopState):
     tmpfile.write_text(state_json)
 
     tmpfile.replace(statefile)
-    log(f"SAVED CURRENT STATE (to {statefile})")
+    # log(f"SAVED CURRENT STATE (to {statefile})")
 
 
 def init_state(statefile: Optional[Path]) -> LoopState:
@@ -92,7 +93,8 @@ def export_state(export_dir: Optional[Path], ls: LoopState) -> None:
     export_single(export_dir, "playback_state", ls.playback_state)
     export_single(export_dir, "looper_slot", ls.looper_slot)
     export_single(export_dir, "current_bpm", str(ls.current_bpm))
-
+    export_single(export_dir, "playback_start_time", str(ls.playback_start_time))
+    export_single(export_dir, "loop_length_bars", str(ls.loop_length_bars))
 
 last_exports: Dict[str, Any] = {}
 def export_single(export_dir: Path, k: str, v: str) -> None:
@@ -276,14 +278,30 @@ def main() -> int:
             sysex_str = " ".join([h(x) for x in group(msg.data[:-1], 2)])
             log(f"SYSEX: {sysex_str}")
 
-            # FIXME: should we save the state?
-            if lstate.current_bpm > 0:
-                loop_length = ((msg.data[8] & 0x0f) << 4) + (msg.data[9] & 0x0f)
-                loop_length_s = (60.0 / lstate.current_bpm) * 4 * loop_length
+            # if lstate.current_bpm > 0:
+            loop_length = ((msg.data[8] & 0x0f) << 4) + (msg.data[9] & 0x0f)
 
-                if loop_length > 0:
+            if lstate.current_bpm > 0:
+                loop_length_s = (60.0 / lstate.current_bpm) * 4 * loop_length
+            else:
+                loop_length_s = 0.0
+
+            if loop_length == 0:
+                log("LOOP LENGTH RESET")
+            else:
+                if loop_length_s == 0.0:
+                    log(f"LOOP LENGTH: {loop_length} bars (unknown tempo)")
+                else:
                     log(f"LOOP LENGTH: {loop_length} bars ({loop_length_s:0.3f} seconds)")
 
+                # if existing loop length is 0, we probably just finished the
+                # first layer of a loop, so set as the playback start time.
+                if lstate.loop_length_bars == 0 and lstate.playback_state == "STARTED":
+                    lstate.playback_start_time = now()
+
+            lstate.loop_length_bars = loop_length
+            save_state(args.state_file, lstate)
+            export_state(args.export_dir, lstate)
         else:
             log(f"UNKNOWN: {mido.format_as_string(msg)}")
 
