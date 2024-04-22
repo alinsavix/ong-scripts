@@ -112,6 +112,7 @@ def log(msg: str) -> None:
     now = datetime.now()
     ts = now.strftime("%Y-%m-%d %H:%M:%S.%f")
     print(f"{ts} {msg}")
+    sys.stdout.flush()
 
 def h(data: List[bytes]) -> str:
     return "".join('%02x' % i for i in data)
