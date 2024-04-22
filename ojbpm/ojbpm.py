@@ -276,7 +276,7 @@ def main() -> int:
         elif msg.type == "sysex":
             # Drop the checksum byte
             sysex_str = " ".join([h(x) for x in group(msg.data[:-1], 2)])
-            log(f"SYSEX: {sysex_str}")
+            # log(f"SYSEX: {sysex_str}")
 
             # if lstate.current_bpm > 0:
             loop_length = ((msg.data[8] & 0x0f) << 4) + (msg.data[9] & 0x0f)
