@@ -96,6 +96,7 @@ def export_state(export_dir: Optional[Path], ls: LoopState) -> None:
     export_single(export_dir, "playback_start_time", str(ls.playback_start_time))
     export_single(export_dir, "loop_length_bars", str(ls.loop_length_bars))
 
+
 last_exports: Dict[str, Any] = {}
 def export_single(export_dir: Path, k: str, v: str) -> None:
     if last_exports.get(k) == v:
@@ -117,6 +118,7 @@ def log(msg: str) -> None:
 def h(data: List[bytes]) -> str:
     return "".join('%02x' % i for i in data)
 
+
 T = TypeVar('T')
 def group(iterable: Iterable[T], num) -> Iterable[T]:
     iterators = [iter(iterable)] * num
@@ -129,6 +131,21 @@ def program_to_slot(program: int) -> str:
     slot_major = (program // 8) + 1
     slot_minor = (program % 8) + 1
     return f"{slot_major}-{slot_minor}"
+
+def list_midi() -> None:
+    print("Available MIDI devices:")
+    for input in mido.get_input_names():
+        print(f"  {input}")
+
+def find_midi_auto() -> Optional[str]:
+    inputs = mido.get_input_names()
+    for name in inputs:
+        if "Steinberg UR44 MIDI 1" in name:
+            return name
+
+    # else
+    return None
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="parse RC-202 MIDI data")
@@ -177,10 +194,23 @@ def parse_args() -> argparse.Namespace:
         help="Location to export state changes for other programs to watch."
     )
 
+    parser.add_argument(
+        "--list-devices",
+        default=False,
+        action='store_true',
+        help="List available MIDI devices"
+    )
+
     return parser.parse_args()
 
 
 def main() -> int:
+    args = parse_args()
+
+    if args.list_devices:
+        list_midi()
+        sys.exit(0)
+
     log("Starting up")
     fake_time = 0.0
 
@@ -188,7 +218,7 @@ def main() -> int:
         nonlocal fake_time
         return fake_time
 
-    args = parse_args()
+
     if args.raw_file is not None:
         log(f"Using raw file: {args.raw_file}")
         log(f"Using simulated clock timing at {args.fake_bpm} BPM")
@@ -200,6 +230,13 @@ def main() -> int:
 
         now = fake_now
     else:
+        if args.device == "auto":
+            args.device = find_midi_auto()
+
+        if args.device is None:
+            print(f"ERROR: Couldn't find a midi device automatically, specify with --device", file=sys.stderr)
+            sys.exit(1)
+
         log(f"Using MIDI device: {args.device}")
         try:
             midi = mido.open_input(args.device)
@@ -220,6 +257,7 @@ def main() -> int:
     fake_time_per_beat = 60 / args.fake_bpm
     fake_time_per_tick = fake_time_per_beat / MIDI_CLOCKS_PER_BEAT
 
+    log(f"Entering main loop")
     for msg in midi:
         if msg.type == "clock":
             fake_time += fake_time_per_tick
