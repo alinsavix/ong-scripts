@@ -1,0 +1,18 @@
+[Unit]
+Description=ojbpm OBS animation speed setter
+After=network.target
+Requires=ojbpm-midi.service
+
+[Service]
+Type=simple
+
+EnvironmentFile=/etc/default/ojbpm
+
+ConditionPathExists=${STATE_EXPORT_DIR}
+ExecStart=/root/ong-scripts/ojbpm/setbpm.py --scene ${ANIM_SCENE} --source ${ANIM_SOURCE} --host ${OBS_HOST} --port ${OBS_PORT} --watch-dir ${STATE_EXPORT_DIR}
+
+Restart=always
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target
