@@ -75,7 +75,7 @@ def set_bpm(host: str, port: int, source: str, bpm: float):
         # sys.stdout.flush()
 
         client.set_input_settings(source, {"speed_percent": int(bpm)}, True)
-        print(f"{source} changed bpm: {current.input_settings['speed_percent']} --> {int(bpm)}")
+        print(f"{source} changed bpm to {int(bpm)}")
         sys.stdout.flush()
 
 def play_source(host: str, port: int, scene: str, source: str, len: float) -> None:
