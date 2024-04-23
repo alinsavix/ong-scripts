@@ -70,14 +70,15 @@ def set_bpm(host: str, port: int, source: str, bpm: float):
 
     with obs.ReqClient(host=host, port=port, timeout=5) as client:
         current = client.get_input_settings(source)
+        # print(ppretty(current.input_settings))
         # print(ppretty(r.input_settings))
         # sys.stdout.flush()
 
         client.set_input_settings(source, {"speed_percent": int(bpm)}, True)
-        print(f"{source} changed bpm: {current.speed_percent} to {bpm}")
+        print(f"{source} changed bpm: {current.input_settings['speed_percent']} --> {int(bpm)}")
         sys.stdout.flush()
 
-def play_bpm(host: str, port: int, scene: str, source: str, len: float) -> None:
+def play_source(host: str, port: int, scene: str, source: str, len: float) -> None:
     with obs.ReqClient(host=host, port=port, timeout=5) as client:
         # r = client2.get_source_active("BPM Headbang")
         # print(f"active: {r.video_active}")
@@ -141,6 +142,13 @@ def parse_args() -> argparse.Namespace:
         help="name of the source to set bpm for"
     )
 
+    parser.add_argument(
+        "--play",
+        default=False,
+        action='store_true',
+        help="Ask OBS to play BPM-matched source"
+    )
+
     return parser.parse_args()
 
 
@@ -149,6 +157,15 @@ def main():
 
     if args.watch_dir:
         watch_bpm(args)
+    elif args.play:
+        if args.bpm:
+            set_bpm(args.host, args.port, args.source, args.bpm)
+        play_source(args.host, args.port, args.scene, args.source, 7)
+    elif args.bpm:
+        set_bpm(args.host, args.port, args.source, args.bpm)
+    else:
+        print("ERROR: not sure what you want me to do", file=sys.stderr)
+
 
         # print(f"Watching {args.watch_dir} for bpm changes")
         # while True:
