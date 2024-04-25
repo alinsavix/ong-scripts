@@ -68,30 +68,35 @@ def set_bpm(host: str, port: int, source: str, bpm: float):
     elif bpm < 50.0:
         bpm = 100.0
 
-    with obs.ReqClient(host=host, port=port, timeout=5) as client:
-        current = client.get_input_settings(source)
-        # print(ppretty(current.input_settings))
-        # print(ppretty(r.input_settings))
-        # sys.stdout.flush()
+    try:
+        with obs.ReqClient(host=host, port=port, timeout=5) as client:
+            current = client.get_input_settings(source)
+            # print(ppretty(current.input_settings))
+            # print(ppretty(r.input_settings))
+            # sys.stdout.flush()
 
-        client.set_input_settings(source, {"speed_percent": int(bpm)}, True)
-        print(f"{source} changed bpm to {int(bpm)}")
-        sys.stdout.flush()
+            client.set_input_settings(source, {"speed_percent": int(bpm)}, True)
+            print(f"{source} changed bpm to {int(bpm)}")
+            sys.stdout.flush()
+    except Exception as e:
+        # For the most part, we don't want to exit if setting the bpm fails,
+        # so catch exceptions and note them.
+        print(f"ERROR: Couldn't set bpm for '{source}'", file=sys.stderr)
 
 def play_source(host: str, port: int, scene: str, source: str, len: float) -> None:
     with obs.ReqClient(host=host, port=port, timeout=5) as client:
         # r = client2.get_source_active("BPM Headbang")
         # print(f"active: {r.video_active}")
         r = client.get_scene_item_id(scene, source)
-        id = r.scene_item_id
+        siid = r.scene_item_id
 
         # r = client.get_scene_item_enabled(scene, id)
         # print(f"active: {r.scene_item_enabled}")
 
         # FIXME: Make this a obs-websocket batch thing instead of sleeping
-        client.set_scene_item_enabled(scene, id, True)
+        client.set_scene_item_enabled(scene, siid, True)
         time.sleep(len)
-        client.set_scene_item_enabled(scene, id, False)
+        client.set_scene_item_enabled(scene, siid, False)
 
 
 def parse_args() -> argparse.Namespace:
