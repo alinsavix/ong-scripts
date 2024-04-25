@@ -1,0 +1,17 @@
+just take the default everything and record a couple of bars
+
+change to slot 1-2. keep the default time signature (4/4, I think), tap out whatever tempo you'd like (shoot for 120bpm or so, doesn't have to be precise), record 8 bars
+
+change to slot 1-3, set a tempo, record 12 bars
+
+change to slot 1-4, set a tempo, record 15 bars
+
+change to slot 1-5, set a tempo, record ...I dunno, 20 or 30 seconds? Then pretend you're making a loop and record a couple more layers, and on a couple of them pretend you screwed something up and have to undo and try again
+
+change to slot 1-6, record 10 or 15 seconds, let it play back a couple of times through .stop it, wait 10 seconds, start playback again.
+
+change to slot 1-7, record 10 seconds, stop the recording (and playback), then start over with a fresh recording (like you screwed up the first layer and want to try again)
+
+change to slot 1-8, set to some oddball time signature (15/4?), set a tempo, record 10 seconds.
+
+9: set looper slot to 1-1 

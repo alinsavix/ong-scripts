@@ -1,0 +1,17 @@
+[Unit]
+Description=ojbpm midi RC-202 bpm watcher
+After=network.target
+
+[Service]
+Type=simple
+
+EnvironmentFile=/etc/default/ojbpm
+
+ExecStartPre=/bin/mkdir -p ${STATE_EXPORT_DIR}
+ExecStart=/root/ong-scripts/ojbpm/ojbpm.py --device ${MIDI_INPUT} --sample-beats ${SAMPLE_BEATS} --state-file ${STATE_FILE} --export-dir ${STATE_EXPORT_DIR}
+
+Restart=always
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target

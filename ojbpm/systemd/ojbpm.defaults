@@ -1,0 +1,27 @@
+# configs required to make ojbpm bits work
+# install to /etc/default/ojbpm
+
+# THe midi input to monitor for looper (or other) clock bytes
+# ("auto" will automatically find the UR44, if there is one)
+MIDI_INPUT=auto
+
+# How many beats to listen for (at 24 clocks per beat) to determine
+# bpm. Larger numbers are more accurate, but take longer to update when
+# the tempo changes
+SAMPLE_BEATS=12
+
+# The OBS instance, must support obs-websocket v5 protocol
+OBS_HOST=192.168.1.152
+OBS_PORT=4455
+
+# where to store (and communicate) the state of things
+STATE_FILE=/tmp/ojbpm_state.json
+STATE_EXPORT_DIR=/tmp/ojbpm_states
+
+# the scene the media source to be adjusted is in
+ANIM_SCENE=GRANDPIANO
+
+# the anim source to be adjusted -- right now just one, but this will
+# eventually (soon) turn into ANIM_PREFIX or similar, and animations to
+# adjust will be automatically found
+ANIM_SOURCE="BPM Headbang"
