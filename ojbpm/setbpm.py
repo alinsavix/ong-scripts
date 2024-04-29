@@ -15,35 +15,63 @@ from watchdog.events import PatternMatchingEventHandler
 from watchdog.observers import Observer
 
 
+update_sources: bool = False
+
+def sources_update():
+    global update_sources
+    update_sources = True
+
 class BPMHandler(PatternMatchingEventHandler):
     def __init__(self, args: argparse.Namespace, patterns: List[str]):
         super().__init__(patterns=patterns)
         self.args = args
 
     def on_modified(self, event):
-        print(f"File modified: {event.src_path}")
+        # print(f"File modified: {event.src_path}")
 
         with open(event.src_path, "r") as f:
             x = f.readline()
 
         if len(x) < 2:
-            print("sleep and retry")
+            # print("sleep and retry")
             with open(event.src_path, "r") as f:
-                time.sleep(1)
+                time.sleep(2)
                 x = f.readline()
 
         if len(x) < 2:
-            print("can't read bpm data, skipping")
+            print("can't read bpm data from file, skipping update")
 
         bpm = float(x)
 
-        print(f"setting BPM to {bpm}")
+        print(f"setting BPM to {bpm}:")
         sys.stdout.flush()
 
-        set_bpm(self.args.host, self.args.port, self.args.source, bpm)
+        sources = get_sources(self.args.host, self.args.port, self.args.source_prefix)
+        set_bpm(self.args.host, self.args.port, sources, bpm)
 
+
+def on_input_created(data):
+    print("A new source was created, refreshing source list")
+    sys.stdout.flush()
+    sources_update()
+
+def on_input_name_changed(data):
+    print("A source was renamed, refreshing source list")
+    sys.stdout.flush()
+    sources_update()
 
 def watch_bpm(args: argparse.Namespace):
+    # Set up watches so we can update when needed
+    # FIXME: It seems like if this gets disconnected (because, say, OBS
+    # exited), we have no way to know and we're dead in the water. Not
+    # sure how to recover properly from that
+    eventclient = obs.EventClient(
+        host=args.host, port=args.port, timeout=5,
+        subs=(obs.Subs.INPUTS)
+    )
+    eventclient.callback.register([on_input_created, on_input_name_changed])
+
+    # And now set up the filesystem watch
     path = args.watch_dir
     event_handler = BPMHandler(args, patterns=["current_bpm.txt"])
 
@@ -62,41 +90,72 @@ def watch_bpm(args: argparse.Namespace):
 # We could stay connected and have fancy reconnect logic, but bpm changes
 # will be rare enough that we're just going to reconnect every time. We
 # should probably do this better, later.
-def set_bpm(host: str, port: int, source: str, bpm: float):
+def set_bpm(host: str, port: int, sources: List[str], bpm: float):
     if bpm > 200.0:
         bpm = bpm / 2.0
     elif bpm < 50.0:
         bpm = 100.0
 
+    with obs.ReqClient(host=host, port=port, timeout=5) as client:
+        # current = client.get_input_settings(source)
+        # print(ppretty(current.input_settings))
+        # print(ppretty(r.input_settings))
+        # sys.stdout.flush()
+        for source in sources:
+            try:
+                client.set_input_settings(source, {"speed_percent": int(bpm)}, True)
+                print(f"{source} changed bpm to {round(bpm)}")
+            except Exception as e:
+                print(f"WARNING: Failed to set bpm for {source}: {e}")
+                sources_update()
+
+            sys.stdout.flush()
+
+
+def get_sources(host: str, port: int, source_prefix: str) -> List[str]:
+    if not hasattr(get_sources, "source_list"):
+        get_sources.source_list = []
+
+    if source_prefix is None:
+        return get_sources.source_list
+
+    global update_sources
+    if not update_sources:
+        return get_sources.source_list
+
+    ret: List[str] = []
     try:
         with obs.ReqClient(host=host, port=port, timeout=5) as client:
-            current = client.get_input_settings(source)
-            # print(ppretty(current.input_settings))
-            # print(ppretty(r.input_settings))
-            # sys.stdout.flush()
+            r = client.get_input_list("ffmpeg_source")
+            for input in r.inputs:
+                if input["inputName"].startswith(source_prefix):
+                    ret.append(input["inputName"])
+    except Exception as e:  # FIXME: narrow this
+        # Stick with whatever we had, and don't change update_sources
+        print(f"ERROR: Couldn't update source list: {e}", file=sys.stderr)
+        return get_sources.source_list
 
-            client.set_input_settings(source, {"speed_percent": int(bpm)}, True)
-            print(f"{source} changed bpm to {int(bpm)}")
-            sys.stdout.flush()
-    except Exception as e:
-        # For the most part, we don't want to exit if setting the bpm fails,
-        # so catch exceptions and note them.
-        print(f"ERROR: Couldn't set bpm for '{source}'", file=sys.stderr)
+    print(f"INFO: updated list of BPM sources: {ret}")
+
+    update_sources = False
+    get_sources.source_list = ret
+    return get_sources.source_list
+
 
 def play_source(host: str, port: int, scene: str, source: str, len: float) -> None:
     with obs.ReqClient(host=host, port=port, timeout=5) as client:
         # r = client2.get_source_active("BPM Headbang")
         # print(f"active: {r.video_active}")
         r = client.get_scene_item_id(scene, source)
-        siid = r.scene_item_id
+        id = r.scene_item_id
 
         # r = client.get_scene_item_enabled(scene, id)
         # print(f"active: {r.scene_item_enabled}")
 
         # FIXME: Make this a obs-websocket batch thing instead of sleeping
-        client.set_scene_item_enabled(scene, siid, True)
+        client.set_scene_item_enabled(scene, id, True)
         time.sleep(len)
-        client.set_scene_item_enabled(scene, siid, False)
+        client.set_scene_item_enabled(scene, id, False)
 
 
 def parse_args() -> argparse.Namespace:
@@ -139,12 +198,19 @@ def parse_args() -> argparse.Namespace:
         help="name of the scene to look for the source in when manually triggering"
     )
 
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
         "--source",
         type=str,
         default=None,
-        required=True,
         help="name of the source to set bpm for"
+    )
+
+    source.add_argument(
+        "--source-prefix",
+        type=str,
+        default=None,
+        help="mass-update playback rate for any source with given prefix"
     )
 
     parser.add_argument(
@@ -154,20 +220,34 @@ def parse_args() -> argparse.Namespace:
         help="Ask OBS to play BPM-matched source"
     )
 
-    return parser.parse_args()
+    parsed_args = parser.parse_args()
+
+    return parsed_args
 
 
 def main():
     args = parse_args()
 
+    # get_sources(args.host, args.port, "")
+    # sys.exit(0)
+
+    if args.source and not args.source_prefix:
+        get_sources.source_list = [args.source]
+    elif args.source_prefix:
+        print(f"Using source prefix '{args.source_prefix}'")
+        sys.stdout.flush()
+        sources_update()
+
+    sources = get_sources(args.host, args.port, args.source_prefix)
+
     if args.watch_dir:
         watch_bpm(args)
     elif args.play:
         if args.bpm:
-            set_bpm(args.host, args.port, args.source, args.bpm)
+            set_bpm(args.host, args.port, sources, args.bpm)
         play_source(args.host, args.port, args.scene, args.source, 7)
     elif args.bpm:
-        set_bpm(args.host, args.port, args.source, args.bpm)
+        set_bpm(args.host, args.port, sources, args.bpm)
     else:
         print("ERROR: not sure what you want me to do", file=sys.stderr)
 
