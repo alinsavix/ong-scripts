@@ -1,0 +1,17 @@
+[Unit]
+Description=ojbpm discord notifier
+After=network.target
+Requires=ojbpm-midi.service
+ConditionPathExists=${STATE_EXPORT_DIR}
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/ojbpm
+
+ExecStart=/root/ong-scripts/ojbpm/telldiscord.py --credentials-file ${OJBPM_CREDENTIALS} --watch-dir ${STATE_EXPORT_DIR}
+
+Restart=always
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target

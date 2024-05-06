@@ -23,3 +23,6 @@ ANIM_SCENE=GRANDPIANO
 
 # the prefix to be used to search for sources to set the BPM on
 ANIM_PREFIX="BPM "
+
+# credentials, for things that need them
+OJBPM_CREDENTIALS=/root/ong-scripts/ojbpm/credentials.toml
