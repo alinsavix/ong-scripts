@@ -11,10 +11,14 @@ import logging
 import subprocess
 import sys
 import time
+import tomllib
+from pathlib import Path
 from typing import List, Literal
 
 import obsws_python as obs
+from discord_webhook import DiscordWebhook
 from tdvutil import ppretty
+from tdvutil.argparse import CheckFile
 
 state: Literal["WAITING", "STREAMING", "COOLDOWN"] = "WAITING"
 
@@ -94,6 +98,43 @@ def check_ffmpeg():
     # otherwise, it's still running
     return True
 
+def get_webhook_url(cfgfile: Path) -> str:
+    print(f"INFO: loading config from {cfgfile}", file=sys.stderr)
+    with cfgfile.open("rb") as f:
+        config = tomllib.load(f)
+
+    try:
+        return config["stemstream"]["webhook_url"]
+    except KeyError:
+        print("ERROR: missing 'webhook_url' in config", file=sys.stderr)
+        sys.exit(1)
+
+# send a message to discord, of a given type, but only if the last
+# message of that type was different
+def send_discord(webhook_url: str|None, msg_type: str, msg: str) -> None:
+    # a stupid trick for persistent function variables
+    if not hasattr(send_discord, "last_sent"):
+        send_discord.last_sent = {}  # msg type -> message
+
+    if webhook_url is None:
+        return
+
+    # if msg in last_sent and now() - last_sent[msg] < 60:
+    if msg == send_discord.last_sent.get(msg_type, ""):  # already sent this one!
+        print(f"DUPLICATE: {msg}", file=sys.stderr)
+        return
+
+    send_discord.last_sent[msg_type] = msg
+
+    webhook = DiscordWebhook(url=webhook_url, content=msg)
+    response = webhook.execute()
+    if response.status_code == 200:
+        print(f"SENT: {msg}", file=sys.stderr)
+    else:
+        print(f"FAILED: (status {response.status_code}): {msg}", file=sys.stderr)
+
+    return
+
 
 client = None
 
@@ -155,6 +196,7 @@ def parse_args() -> argparse.Namespace:
         help="host to which to stream audio"
     )
 
+    # FIXME: move these to credentials file?
     parser.add_argument(
         "--stream-user",
         type=str,
@@ -169,6 +211,14 @@ def parse_args() -> argparse.Namespace:
         help="icecast password to use when streaming"
     )
 
+    parser.add_argument(
+        "--credentials-file", "-c",
+        type=Path,
+        default=None,
+        action=CheckFile(must_exist=True),
+        help="file with discord credentials"
+    )
+
     return parser.parse_args()
 
 
@@ -177,6 +227,12 @@ def main():
 
     logging.basicConfig(level=logging.FATAL)
     args = parse_args()
+
+    if args.credentials_file is not None:
+        webhook_url = get_webhook_url(args.credentials_file)
+    else:
+        webhook_url = None
+
     atexit.register(kill_ffmpeg)
 
     print("INFO: in startup, waiting for OBS to start streaming", file=sys.stderr)
@@ -189,6 +245,7 @@ def main():
         if state == "WAITING":
             if get_streaming(args):
                 print("INFO: OBS is streaming, starting ffmpeg", file=sys.stderr)
+                send_discord(webhook_url, "status", "Stream online, starting stem stream")
                 run_ffmpeg(args)
                 state = "STREAMING"
 
@@ -196,11 +253,14 @@ def main():
             if not check_ffmpeg():
                 # ffmpeg has died, sigh
                 print("WARNING: ffmpeg died when we didn't expect it, restarting", file=sys.stderr)
+                send_discord(webhook_url, "status",
+                             "Unexpected termination of stem stream (will retry)")
                 state = "WAITING"  # will restart next check
                 continue
 
             if not get_streaming(args):
                 print("INFO: OBS has stopped streaming, entering cooldown", file=sys.stderr)
+                send_discord(webhook_url, "status", "Stream offline, starting cooldown")
                 cooldown_start = time.time()
                 state = "COOLDOWN"
                 continue
@@ -210,12 +270,14 @@ def main():
             # streaming
             if get_streaming(args):
                 print("INFO: OBS is streaming again, continuing", file=sys.stderr)
+                send_discord(webhook_url, "status", "Stream back online, continuing with stem stream")
                 state = "STREAMING"
                 continue
 
             # Otherwise, we can be in cooldown for 5 mins before we kill ffmpeg
             if (time.time() - cooldown_start) > (5 * 60):
                 print("INFO: OBS cooldown has expired, killing ffmpeg", file=sys.stderr)
+                send_discord(webhook_url, "status", "Cooldown ended, terming stem stream")
                 kill_ffmpeg()
                 state = "WAITING"
 
