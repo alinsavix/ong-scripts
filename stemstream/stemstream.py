@@ -11,11 +11,11 @@ import logging
 import subprocess
 import sys
 import time
-import tomllib
 from pathlib import Path
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 import obsws_python as obs
+import toml
 from discord_webhook import DiscordWebhook
 from obsws_python.error import OBSSDKRequestError
 from tdvutil import ppretty
@@ -103,8 +103,7 @@ def check_ffmpeg():
 
 def get_webhook_url(cfgfile: Path) -> str:
     print(f"INFO: loading config from {cfgfile}", file=sys.stderr)
-    with cfgfile.open("rb") as f:
-        config = tomllib.load(f)
+    config = toml.load(cfgfile)
 
     try:
         return config["stemstream"]["webhook_url"]
@@ -114,7 +113,7 @@ def get_webhook_url(cfgfile: Path) -> str:
 
 # send a message to discord, of a given type, but only if the last
 # message of that type was different
-def send_discord(webhook_url: str | None, msg_type: str, msg: str) -> None:
+def send_discord(webhook_url: Optional[str], msg_type: str, msg: str) -> None:
     # a stupid trick for persistent function variables
     if not hasattr(send_discord, "last_sent"):
         send_discord.last_sent = {}  # msg type -> message
@@ -156,7 +155,7 @@ def connect_obs(host: str, port: int) -> obs.ReqClient:
         return client
     except OBSSDKRequestError as e:
         code = e.code
-    except ConnectionRefusedError:
+    except (ConnectionRefusedError, OSError):
         # print("ERROR: Connection Refused", file=sys.stderr)
         return None
     except Exception as e:

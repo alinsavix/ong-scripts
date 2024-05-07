@@ -2,7 +2,6 @@
 Description=ojbpm discord notifier
 After=network.target
 Requires=ojbpm-midi.service
-ConditionPathExists=${STATE_EXPORT_DIR}
 
 [Service]
 Type=simple

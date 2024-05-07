@@ -3,10 +3,10 @@ import argparse
 import pprint
 import sys
 import time
-import tomllib
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
+import toml
 from discord_webhook import DiscordWebhook
 from tdvutil import ppretty
 from tdvutil.argparse import CheckFile
@@ -26,8 +26,7 @@ def now() -> int:
 
 def get_webhook_url(cfgfile: Path) -> str:
     log(f"loading config from {cfgfile}")
-    with cfgfile.open("rb") as f:
-        config = tomllib.load(f)
+    config = toml.load(cfgfile)
 
     try:
         return config["telldiscord"]["webhook_url"]
@@ -35,7 +34,7 @@ def get_webhook_url(cfgfile: Path) -> str:
         log("ERROR: missing 'webhook_url' in config")
         sys.exit(1)
 
-def file_read(fp: Path) -> str | None:
+def file_read(fp: Path) -> Optional[str]:
     with fp.open("r") as f:
         x = f.readline()
         if len(x) < 2:
