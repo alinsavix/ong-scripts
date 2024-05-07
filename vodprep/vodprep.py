@@ -291,6 +291,15 @@ def main(argv: List[str]) -> int:
         else:
             mkthumbnail(background="thumbnail_template.png", date=datestr, center_x=606)
 
+        # Back up the log if we have a backups directory
+        backupdir = Path("backups")
+        if backupdir.exists():
+            dl = gc.export(file_id=ONG_SPREADSHEET_ID, format=gspread.utils.ExportFormat.EXCEL)
+
+            backup_path = backupdir / f"{datestr}.xlsx"
+            backup_path.write_bytes(dl)
+            print(f"Saved onglog backup as {backup_path}")
+
     return 0
 
 
