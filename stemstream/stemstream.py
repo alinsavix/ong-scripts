@@ -17,6 +17,7 @@ from typing import List, Literal
 
 import obsws_python as obs
 from discord_webhook import DiscordWebhook
+from obsws_python.error import OBSSDKRequestError
 from tdvutil import ppretty
 from tdvutil.argparse import CheckFile
 
@@ -36,18 +37,20 @@ def run_ffmpeg(args: argparse.Namespace):
         "-c:a", "libmp3lame", "-q:a", "2",
         "-f", "mp3", icecast_url,
     ]
-    # ffmpeg_cmd = [ "sleep", "5"]
+    # ffmpeg_cmd = ["py", "./sleep.py"]
 
     try:
         print("INFO: ffmpeg startup, output logged to /tmp/stemstream.log", file=sys.stderr)
         with open('/tmp/stemstream.log', "a") as logfile:
+            # with open('d:/temp/stemstream.log', "a") as logfile:
             subproc = subprocess.Popen(
                 ffmpeg_cmd, shell=False,
                 stdin=subprocess.DEVNULL, stdout=logfile,
                 stderr=subprocess.STDOUT
             )
-    except FileNotFoundError:
-        print("ERROR: couldn't execute ffmpeg, please make sure it exists in your PATH", file=sys.stderr)
+    except FileNotFoundError as e:
+        print(
+            f"ERROR: couldn't execute ffmpeg: {e}", file=sys.stderr)
         sys.exit(1)
     # except subprocess.TimeoutExpired:
     #     print(f"ERROR: remux process timed out after {args.timeout} seconds", file=sys.stderr)
@@ -111,12 +114,18 @@ def get_webhook_url(cfgfile: Path) -> str:
 
 # send a message to discord, of a given type, but only if the last
 # message of that type was different
-def send_discord(webhook_url: str|None, msg_type: str, msg: str) -> None:
+def send_discord(webhook_url: str | None, msg_type: str, msg: str) -> None:
     # a stupid trick for persistent function variables
     if not hasattr(send_discord, "last_sent"):
         send_discord.last_sent = {}  # msg type -> message
 
     if webhook_url is None:
+        return
+
+    checkfile = Path(__file__).parent / "no_discord"
+    if checkfile.exists():
+        print(
+            f"safe mode, not sending discord updates (to resume: rm {checkfile})", file=sys.stderr)
         return
 
     # if msg in last_sent and now() - last_sent[msg] < 60:
@@ -139,13 +148,29 @@ def send_discord(webhook_url: str|None, msg_type: str, msg: str) -> None:
 client = None
 
 def connect_obs(host: str, port: int) -> obs.ReqClient:
-    global clilent
+    global client
+
+    # the logic here sucks
     try:
         client = obs.ReqClient(host=host, port=port, timeout=5)
         return client
-    except Exception as e:
-        print(f"ERROR: couldn't connect to OBS: {e}")
+    except OBSSDKRequestError as e:
+        code = e.code
+    except ConnectionRefusedError:
+        # print("ERROR: Connection Refused", file=sys.stderr)
         return None
+    except Exception as e:
+        print(f"ERROR: couldn't connect to OBS: {e}", file=sys.stderr)
+        return None
+    if code != 207:
+        print(f"WARNING: Unknown OBS response code {code}", file=sys.stderr)
+        return None
+
+
+    print(f"WARNING: OBS not ready, retrying in 30 seconds", file=sys.stderr)
+    time.sleep(3)
+    return connect_obs(host, port)
+
 
 # returns true if we're streaming
 def get_streaming(args: argparse.Namespace) -> bool:
@@ -270,7 +295,8 @@ def main():
             # streaming
             if get_streaming(args):
                 print("INFO: OBS is streaming again, continuing", file=sys.stderr)
-                send_discord(webhook_url, "status", "Stream back online, continuing with stem stream")
+                send_discord(webhook_url, "status",
+                             "Stream back online, continuing with stem stream")
                 state = "STREAMING"
                 continue
 
