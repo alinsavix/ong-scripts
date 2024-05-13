@@ -261,8 +261,8 @@ def main() -> int:
     for msg in midi:
         if msg.type == "clock":
             fake_time += fake_time_per_tick
-            if lstate.playback_state == "STOPPED":
-                continue
+            # if lstate.playback_state == "STOPPED":
+            #     continue
             if clock_tick_count == 0:
                 start_tick_time = now()
             clock_tick_count += 1
@@ -275,6 +275,10 @@ def main() -> int:
                 elapsed = now() - start_tick_time
                 time_per_beat = elapsed / args.sample_beats
                 new_bpm = round(60.0 / time_per_beat, 1)
+
+                # New bpm is less than a sane value, ignore it
+                if new_bpm < 10.0:
+                    continue
 
                 if lstate.current_bpm != new_bpm:
                     lstate.current_bpm = new_bpm
