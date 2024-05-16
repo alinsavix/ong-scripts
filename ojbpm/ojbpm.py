@@ -31,6 +31,7 @@ class LoopState:
     playback_state: Literal["UNKNOWN", "STOPPED", "STARTED"] = "UNKNOWN"
     looper_slot: str = "0-0"
     loop_length_bars: int = 0
+    loop_length_secs: float = 0.0
     playback_start_time: float = 0.0
     playback_stop_time: float = 0.0
     current_bpm: float = 0
@@ -95,6 +96,7 @@ def export_state(export_dir: Optional[Path], ls: LoopState) -> None:
     export_single(export_dir, "current_bpm", str(ls.current_bpm))
     export_single(export_dir, "playback_start_time", str(ls.playback_start_time))
     export_single(export_dir, "loop_length_bars", str(ls.loop_length_bars))
+    export_single(export_dir, "loop_length_secs", str(ls.loop_length_secs))
 
 
 last_exports: Dict[str, Any] = {}
@@ -325,7 +327,7 @@ def main() -> int:
             loop_length = ((msg.data[8] & 0x0f) << 4) + (msg.data[9] & 0x0f)
 
             if lstate.current_bpm > 0:
-                loop_length_s = (60.0 / lstate.current_bpm) * 4 * loop_length
+                loop_length_s = (60.0 / lstate.current_bpm) * 2 * loop_length
             else:
                 loop_length_s = 0.0
 
@@ -343,6 +345,7 @@ def main() -> int:
                     lstate.playback_start_time = now()
 
             lstate.loop_length_bars = loop_length
+            lstate.loop_length_secs = loop_length_s
             save_state(args.state_file, lstate)
             export_state(args.export_dir, lstate)
         else:

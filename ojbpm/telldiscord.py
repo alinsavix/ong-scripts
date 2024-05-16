@@ -47,7 +47,7 @@ def file_read(fp: Path) -> Optional[str]:
     if len(x) < 2:
         return None
 
-    return x
+    return x.rstrip()
 
 def file_age(fp: Path) -> int:
     return now() - int(fp.stat().st_mtime)
@@ -122,11 +122,12 @@ class OJBPMHandler(PatternMatchingEventHandler):
 min_ages = {
     "current_bpm.txt": 20,  # Might take a bit to settle
     "looper_slot.txt": 5,
+    "loop_length_secs.txt": 20,
 }
 
 def watch_ojbpm(args: argparse.Namespace, webhook_url: str):
     path = args.watch_dir
-    event_handler = OJBPMHandler(args, patterns=["current_bpm.txt", "looper_slot.txt"])
+    event_handler = OJBPMHandler(args, patterns=["current_bpm.txt", "looper_slot.txt", "loop_length_secs.txt"])
 
     observer = Observer()
     observer.schedule(event_handler, path, recursive=False)
@@ -160,7 +161,7 @@ def watch_ojbpm(args: argparse.Namespace, webhook_url: str):
                     log(f"WARNING: Can't read bpm data from {fp}, skipping update")
                     continue
 
-                send_discord(webhook_url, "bpm", f"Looper BPM: {bpm.rstrip()}", upstr)
+                send_discord(webhook_url, "bpm", f"Looper BPM: {bpm}", upstr)
 
             elif bn == "looper_slot.txt":
                 slot = file_read(Path(fp))
@@ -168,7 +169,18 @@ def watch_ojbpm(args: argparse.Namespace, webhook_url: str):
                     log(f"WARNING: Can't read slot data from {fp}, skipping update")
                     continue
 
-                send_discord(webhook_url, "slot", f"Looper SLOT: {slot.rstrip()}", upstr)
+                send_discord(webhook_url, "slot", f"Looper SLOT: {slot}", upstr)
+
+            elif bn == "loop_length_secs.txt":
+                loop_length_s = file_read(Path(fp))
+                loop_length_bars = file_read(Path(fp).with_stem("loop_length_bars"))
+
+                if loop_length_s is None or loop_length_bars is None:
+                    log(f"WARNING: Can't read loop length data from {fp} (or loop_length_bars.txt), skipping update")
+                    continue
+
+                loop_length_fstr = f"{float(loop_length_s):0.3f}"
+                send_discord(webhook_url, "loop_length", f"Loop LENGTH: {loop_length_bars} bars ({loop_length_fstr}s, assuming 2/4)", upstr)
 
             else:
                 log(f"ERROR: Unknown file changed: {fp}")
