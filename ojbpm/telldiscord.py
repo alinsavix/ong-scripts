@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import argparse
+import logging
 import pprint
 import sys
 import time
+from datetime import timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import obsws_python as obs
 import toml
 from discord_webhook import DiscordWebhook
 from tdvutil import ppretty
@@ -52,9 +55,27 @@ def file_age(fp: Path) -> int:
 #
 # the good stuff
 #
+# get the current stream uptime
+def get_uptime(host: Optional[str], port: int) -> Optional[str]:
+    if host is None:
+        return None
+
+    try:
+        with obs.ReqClient(host=host, port=port, timeout=5) as client:
+            r = client.get_stream_status()
+            uptime = int(r.output_duration) // 1000
+
+            if uptime == 0:
+                return None
+
+            return str(timedelta(seconds=uptime))
+    except Exception:
+        return None
+
+
 # send a message to discord, of a given type, but only if the last
 # message of that type was different
-def send_discord(webhook_url: str, msg_type: str, msg: str) -> None:
+def send_discord(webhook_url: str, msg_type: str, msg: str, upstr: str) -> None:
     # a stupid trick for persistent function variables
     if not hasattr(send_discord, "last_sent"):
         send_discord.last_sent = {}  # msg type -> message
@@ -66,7 +87,7 @@ def send_discord(webhook_url: str, msg_type: str, msg: str) -> None:
 
     send_discord.last_sent[msg_type] = msg
 
-    webhook = DiscordWebhook(url=webhook_url, content=msg)
+    webhook = DiscordWebhook(url=webhook_url, content=f"{upstr}{msg}")
     response = webhook.execute()
     if response.status_code == 200:
         log(f"SENT: {msg}")
@@ -121,6 +142,14 @@ def watch_ojbpm(args: argparse.Namespace, webhook_url: str):
             if age < min_ages[bn]:
                 continue
 
+            uptime = get_uptime(args.host, args.port)
+            if uptime is not None:
+                upstr = f"[{uptime}]  "
+            elif args.host is not None:
+                upstr = "[offline]  "
+            else:
+                upstr = ""
+
             # The file is old enough, remove it from the list. Yes, there
             # is a minor race condition here.
             changed.pop(fp)
@@ -131,7 +160,7 @@ def watch_ojbpm(args: argparse.Namespace, webhook_url: str):
                     log(f"WARNING: Can't read bpm data from {fp}, skipping update")
                     continue
 
-                send_discord(webhook_url, "bpm", f"Looper BPM: {bpm}")
+                send_discord(webhook_url, "bpm", f"Looper BPM: {bpm.rstrip()}", upstr)
 
             elif bn == "looper_slot.txt":
                 slot = file_read(Path(fp))
@@ -139,7 +168,7 @@ def watch_ojbpm(args: argparse.Namespace, webhook_url: str):
                     log(f"WARNING: Can't read slot data from {fp}, skipping update")
                     continue
 
-                send_discord(webhook_url, "slot", f"Looper SLOT: {slot}")
+                send_discord(webhook_url, "slot", f"Looper SLOT: {slot.rstrip()}", upstr)
 
             else:
                 log(f"ERROR: Unknown file changed: {fp}")
@@ -175,6 +204,20 @@ def parse_args() -> argparse.Namespace:
         help="ojbpm export path to watch for bpm changes",
     )
 
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=None,  # 192.168.1.152
+        help="address or hostname of host running OBS"
+    )
+
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=4455,
+        help="port number for OBS websocket"
+    )
+
     parsed_args = parser.parse_args()
 
     if parsed_args.credentials_file is None:
@@ -184,8 +227,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main():
-    args = parse_args()
+    # make obsws-python not really output any logging on its own
+    logging.basicConfig(level=logging.FATAL)
 
+    args = parse_args()
     webhook_url = get_webhook_url(args.credentials_file)
     watch_ojbpm(args, webhook_url)
 
