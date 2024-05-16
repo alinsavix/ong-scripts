@@ -14,7 +14,6 @@ from tdvutil.argparse import CheckFile
 from watchdog.events import PatternMatchingEventHandler
 from watchdog.observers import Observer
 
-
 update_sources: bool = False
 
 def sources_update():
@@ -65,10 +64,20 @@ def watch_bpm(args: argparse.Namespace):
     # FIXME: It seems like if this gets disconnected (because, say, OBS
     # exited), we have no way to know and we're dead in the water. Not
     # sure how to recover properly from that
-    eventclient = obs.EventClient(
-        host=args.host, port=args.port, timeout=5,
-        subs=(obs.Subs.INPUTS)
-    )
+    eventclient = None
+
+    while eventclient is None:
+        try:
+            eventclient = obs.EventClient(
+                host=args.host, port=args.port, timeout=5,
+                subs=(obs.Subs.INPUTS)
+            )
+        except OSError as e:
+            print(f"ERROR (will retry): {e}")
+            sys.stdout.flush()
+
+        time.sleep(60)
+
     eventclient.callback.register([on_input_created, on_input_name_changed])
 
     # And now set up the filesystem watch
