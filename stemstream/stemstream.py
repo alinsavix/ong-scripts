@@ -31,7 +31,7 @@ def run_ffmpeg(args: argparse.Namespace):
     userpass = f"{args.stream_user}:{args.stream_pass}"
     icecast_url = f"icecast://{userpass}@{args.stream_host}:{args.stream_port}/ong-stems.mp3"
     ffmpeg_cmd = [
-        "ffmpeg", "-hide_banner", "-stats_period", "60",
+        "ffmpeg", "-hide_banner",
         "-f", "alsa", "-channels", "6", "-sample_rate", "48000", "-c:a", "pcm_s24le", "-channel_layout", "6.0",
         "-i", "hw:CARD=UR44,DEV=0", "-af", "pan=2c|c0=c4|c1=c5",
         "-c:a", "libmp3lame", "-q:a", "2",
