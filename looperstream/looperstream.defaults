@@ -1,6 +1,8 @@
 # The OBS instance, must support obs-websocket v5 protocol
 OBS_HOST=192.168.1.152
 OBS_PORT=4455
+OBS_TIMECODE_SCENE=StartingSoon
+OBS_TIMECODE_SOURCE=timecode
 
 # specs for the video feed
 CAMERA_DEVICE=/dev/v4l/by-id/usb-046d_0825_8B322E20-video-index0

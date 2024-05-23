@@ -28,7 +28,9 @@ subproc = None
 def run_ffmpeg(args: argparse.Namespace):
     global subproc
 
+
     drawtext_conf = "font=mono:fontsize=48:y=h-text_h-15:box=1:boxcolor=black:boxborderw=10:fontcolor=white:expansion=normal"
+
 
     ffmpeg_cmd = [
         "ffmpeg", "-hide_banner",
@@ -37,7 +39,7 @@ def run_ffmpeg(args: argparse.Namespace):
         "-vf", f"drawtext=x=15:text='%{{localtime}}':{drawtext_conf},drawtext=x=w-text_w-15:text='%{{n}}':{drawtext_conf}",
         "-c:v", "libx264", "-r", str(args.stream_fps),
         "-b:v", "0", "-maxrate", args.stream_bitrate, "-bufsize", "2000k",
-        "-g", "10", "-pix_fmt", "yuv420p", "-crf", "23", "-preset", "veryfast",
+        "-g", str(args.stream_fps * 2), "-pix_fmt", "yuv420p", "-crf", "23", "-preset", "veryfast",
         "-an", "-f", "flv", args.stream_url,
     ]
     # ffmpeg_cmd = ["py", "./sleep.py"]
