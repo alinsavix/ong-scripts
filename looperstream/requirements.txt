@@ -1,0 +1,4 @@
+tdvutil
+obsws_python
+discord-webhook
+toml
