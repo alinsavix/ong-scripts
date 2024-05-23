@@ -28,7 +28,6 @@ subproc = None
 def run_ffmpeg(args: argparse.Namespace):
     global subproc
 
-    # export DRAWTEXT_CONF='font=mono:fontsize=48:y=h-text_h-15:box=1:boxcolor=black:boxborderw=10:fontcolor=white:expansion=normal' ; ffmpeg -f v4l2 -framerate 5 -video_size 1280x720 -i /dev/v4l/by-id/usb-046d_0825_8B322E20-video-index0 -vf "drawtext=x=15:text='%{localtime}':${DRAWTEXT_CONF},drawtext=x=w-text_w-15:text='%{n}':${DRAWTEXT_CONF}" -c:v libx264 -r 5 -b:v 0 -maxrate 600k -bufsize 2000k -g 10 -pix_fmt yuv420p -crf 23 -preset veryfast -an -f flv rtmp://tenforward/ong/looper
     drawtext_conf = "font=mono:fontsize=48:y=h-text_h-15:box=1:boxcolor=black:boxborderw=10:fontcolor=white:expansion=normal"
 
     ffmpeg_cmd = [
@@ -176,7 +175,6 @@ def connect_obs(host: str, port: int) -> obs.ReqClient:
 
 # returns true if we're streaming
 def get_streaming(args: argparse.Namespace) -> bool:
-    return True
     global client
 
     if client is None:
@@ -191,6 +189,27 @@ def get_streaming(args: argparse.Namespace) -> bool:
         connect_obs(args.host, args.port)
         r = client.get_stream_status()
     return r.output_active
+
+
+def play_source(args: argparse.Namespace, scene: str, source: str) -> None:
+    global client
+
+    if client is None:
+        client = connect_obs(args.host, args.port)
+
+    if client is None:
+        return
+
+    try:
+        r = client.get_scene_item_id(scene, source)
+        id = r.scene_item_id
+
+        client.set_scene_item_enabled(scene, id, True)
+        time.sleep(5)
+        client.set_scene_item_enabled(scene, id, False)
+    except Exception as e:
+        print(f"ERROR: couldn't play timecode source: {e}", file=sys.stderr)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -208,6 +227,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=4455,
         help="port number for OBS websocket"
+    )
+
+    parser.add_argument(
+        "--timecode-scene",
+        type=str,
+        help="scene of timecode source in OBS, for automatic display"
+    )
+
+    parser.add_argument(
+        "--timecode-source",
+        type=str,
+        help="source name of timecode source in OBS, for automatic display"
     )
 
     parser.add_argument(
@@ -282,6 +313,9 @@ def main():
                 send_discord(webhook_url, "status", "Stream online, starting looper stream")
                 run_ffmpeg(args)
                 state = "STREAMING"
+                if args.timecode_scene is not None:
+                    time.sleep(30)   # this sucks
+                    play_source(args, args.timecode_scene, args.timecode_source)
 
         elif state == "STREAMING":
             if not check_ffmpeg():
