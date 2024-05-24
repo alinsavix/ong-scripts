@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import obsws_python as obs
+import requests
 import toml
 from discord_webhook import DiscordWebhook
 from tdvutil import ppretty
@@ -55,8 +56,8 @@ def file_age(fp: Path) -> int:
 #
 # the good stuff
 #
-# get the current stream uptime
-def get_uptime(host: Optional[str], port: int) -> Optional[str]:
+# get the current stream uptime (according to OBS)
+def get_obs_uptime(host: Optional[str], port: int) -> Optional[str]:
     if host is None:
         return None
 
@@ -72,6 +73,22 @@ def get_uptime(host: Optional[str], port: int) -> Optional[str]:
     except Exception:
         return None
 
+
+def get_frustbox_uptime() -> Optional[str]:
+    # Ask frustbox for the state of things
+    response = requests.get('https://ongcorebot.jgottfried.net/overlay/api/json/uptime/jonathanong')
+
+    if response.status_code != 200:
+        return None
+
+    # Parse the response as JSON
+    data = response.json()
+
+    stream = data.get("stream", {})
+    if len(stream) == 0:
+        return "offline"
+
+    return stream.get("uptime")
 
 # send a message to discord, of a given type, but only if the last
 # message of that type was different
@@ -143,7 +160,8 @@ def watch_ojbpm(args: argparse.Namespace, webhook_url: str):
             if age < min_ages[bn]:
                 continue
 
-            uptime = get_uptime(args.host, args.port)
+            # uptime = get_obs_uptime(args.host, args.port)
+            uptime = get_frustbox_uptime()
             if uptime is not None:
                 upstr = f"[{uptime}]  "
             elif args.host is not None:

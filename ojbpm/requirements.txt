@@ -3,3 +3,4 @@ tdvutil
 obsws_python
 watchdog
 discord-webhook
+requests
