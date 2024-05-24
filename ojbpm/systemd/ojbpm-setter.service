@@ -5,10 +5,8 @@ Requires=ojbpm-midi.service
 
 [Service]
 Type=simple
-
 EnvironmentFile=/etc/default/ojbpm
 
-ConditionPathExists=${STATE_EXPORT_DIR}
 ExecStart=/root/ong-scripts/ojbpm/setbpm.py --scene ${ANIM_SCENE} --source-prefix ${ANIM_PREFIX} --host ${OBS_HOST} --port ${OBS_PORT} --watch-dir ${STATE_EXPORT_DIR}
 
 Restart=always

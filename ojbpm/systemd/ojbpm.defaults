@@ -15,8 +15,8 @@ OBS_HOST=192.168.1.152
 OBS_PORT=4455
 
 # where to store (and communicate) the state of things
-STATE_FILE=/tmp/ojbpm_state.json
-STATE_EXPORT_DIR=/tmp/ojbpm_states
+STATE_FILE=/dev/shm/ojbpm_state.json
+STATE_EXPORT_DIR=/dev/shm/ojbpm_states
 
 # the scene the media source to be adjusted is in
 ANIM_SCENE=GRANDPIANO
