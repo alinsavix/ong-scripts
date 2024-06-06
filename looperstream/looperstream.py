@@ -195,6 +195,30 @@ def get_streaming(args: argparse.Namespace) -> bool:
     return r.output_active
 
 
+def get_obs_uptime(host: Optional[str], port: int) -> Optional[int]:
+    global client
+
+    if host is None:
+        return None
+
+    if client is None:
+        client = connect_obs(host, port)
+
+    if client is None:
+        return None
+
+    try:
+        r = client.get_stream_status()
+        uptime = int(r.output_duration) // 1000
+
+        if uptime == 0:
+            return None
+
+        return uptime
+    except Exception:
+        return None
+
+
 def play_source(args: argparse.Namespace, scene: str, source: str) -> None:
     global client
 
@@ -319,7 +343,9 @@ def main():
                 state = "STREAMING"
                 if args.timecode_scene is not None:
                     time.sleep(30)   # this sucks
-                    play_source(args, args.timecode_scene, args.timecode_source)
+                    uptime = get_obs_uptime(args.host, args.port)
+                    if uptime is not None and uptime > 25 and uptime < 300:
+                        play_source(args, args.timecode_scene, args.timecode_source)
 
         elif state == "STREAMING":
             if not check_ffmpeg():
