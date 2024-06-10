@@ -1,3 +1,5 @@
 tdvutil
 obsws_python
 discord-webhook
+toml
+requests
