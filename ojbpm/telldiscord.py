@@ -104,6 +104,11 @@ def send_discord(webhook_url: str, msg_type: str, msg: str, upstr: str) -> None:
 
     send_discord.last_sent[msg_type] = msg
 
+    checkfile = Path(__file__).parent / "no_discord"
+    if checkfile.exists():
+        log(f"safe mode, not sending discord updates (to resume: rm {checkfile})")
+        return
+
     webhook = DiscordWebhook(url=webhook_url, content=f"{upstr}{msg}")
     response = webhook.execute()
     if response.status_code == 200:
