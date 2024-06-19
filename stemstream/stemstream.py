@@ -306,7 +306,7 @@ def main():
             # Otherwise, we can be in cooldown for 5 mins before we kill ffmpeg
             if (time.time() - cooldown_start) > (5 * 60):
                 log("INFO: OBS cooldown has expired, killing ffmpeg")
-                send_discord(webhook_url, "status", "Cooldown ended, terming stem stream")
+                send_discord(webhook_url, "status", "Cooldown ended, terminating stem stream")
                 kill_ffmpeg()
                 state = "WAITING"
 
