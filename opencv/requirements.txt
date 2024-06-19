@@ -1,0 +1,9 @@
+numpy
+scipy
+wxPython
+opencv-contrib-python
+vidgear
+setuptools
+scikit-image
+tdvutil
+matplotlib
