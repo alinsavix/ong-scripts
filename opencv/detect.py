@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import colorsys
 import itertools
 import sys
 import time
@@ -64,7 +65,7 @@ def flatten(list_of_lists):
     return list(itertools.chain.from_iterable(list_of_lists))
 
 
-def findAruco(frame, detector: aruco.ArucoDetector, draw=True) -> Optional[Dict[int, MarkerCorners]]:
+def findAruco(args: argparse.Namespace, frame, detector: aruco.ArucoDetector) -> Optional[Dict[int, MarkerCorners]]:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     # key = getattr(aruco, 'DICT_APRILTAG_16h5')
@@ -108,12 +109,12 @@ def findAruco(frame, detector: aruco.ArucoDetector, draw=True) -> Optional[Dict[
         )
         markers[markerID] = marker
 
-    if not draw:
+    if not args.show_aruco:
         return markers
 
     for id, marker in markers.items():
-        print(f"{id=}")
-        print(f"{marker=}")
+        # print(f"{id=}")
+        # print(f"{marker=}")
         # draw the bounding box of the ArUCo detection
         cv2.line(frame, marker.UL, marker.UR, (255, 255, 0), 4)
         cv2.line(frame, marker.UR, marker.BR, (0, 255, 0), 4)
@@ -132,53 +133,65 @@ def findAruco(frame, detector: aruco.ArucoDetector, draw=True) -> Optional[Dict[
                     0.5, (0, 255, 0), 2)
 
     cv2.imshow("Image", frame)
-    cv2.waitKey(5000)
+    cv2.waitKey(0)
 
     return markers
 
 
-def cluster(args: argparse.Namespace, frame: cv2.typing.MatLike) -> None:
+def cluster(args: argparse.Namespace, frame: cv2.typing.MatLike):
     # k-means clustering attempt
-    pixels = frame.reshape(-1, 3)
-    k = 15  # number of clusters
+    pixels = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).reshape(-1, 3)
+    k = 3  # number of clusters
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
     _, labels, centers = cv2.kmeans(pixels.astype(np.float32), k,
                                     None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
 
-    # remove the most dominant color, which is going to be black
+    if args.show_clusters:
+        print(f"centers={centers.astype(int)}")
+
+    # remove the most dominant color, which is going to be black. If it's
+    # NOT black, we have a problem.
     bincounts = np.bincount(labels.flatten())
     maxindex = np.argmax(bincounts)
 
-    np.delete(bincounts, maxindex)
-    np.delete(centers, maxindex)
+    # Return early if black isn't the most dominant color
+    if not np.array_equal(centers[maxindex], [0, 0, 0]):
+        # print("Black is not the most common color, problem")
+        return None
+
+    bincounts = np.delete(bincounts, maxindex)
+    centers = np.delete(centers, maxindex, axis=0)
 
     # What's left should have an actual color as the most common thing
     maxindex = np.argmax(bincounts)
     dominant_color = centers[maxindex]
+    # print(f"{dominant_color=}")
     # dominant_color = centers[np.argmax(np.bincount(labels.flatten()))]
     # x = -np.sort(-np.bincount(labels.flatten()))
     # print(f"{x=}")
-    for c in centers:
-        print(c)
+    # for c in centers:
+    #     print(c)
     # print(dominant_color)
 
-    # histogram that
-    hist = np.zeros(k)
-    for label in labels:
-        hist[label] += 1
+    if args.show_clusters:
+        hist = np.zeros(k)
+        for label in labels:
+            hist[label] += 1
 
-    import matplotlib.pyplot as plt
+        import matplotlib.pyplot as plt
 
-    plt.bar(range(k), hist, color=[tuple(c / 255.0 for c in center) for center in centers])
-    plt.xlabel('Cluster')
-    plt.ylabel('Pixel Count')
-    plt.title('Color Clusters Histogram')
-    plt.show()
+        plt.bar(range(k), hist, color=[tuple(c / 255.0 for c in center) for center in centers])
+        plt.xlabel('Cluster')
+        plt.ylabel('Pixel Count')
+        plt.title('Color Clusters Histogram')
+        plt.show()
+
+    return dominant_color
 
 
 def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
              detector: aruco.ArucoDetector, ref_markers: Dict[int, MarkerCorners],
-             mask_img: cv2.typing.MatLike, mask_roi: Tuple[Point, Point]) -> Optional[cv2.typing.MatLike]:
+             mask_img: cv2.typing.MatLike, mask_roi: Tuple[Point, Point]):
     # input_file = Path(sys.argv[1])
     # if not input_file.exists():
     #     print(f"ERROR: File {input_file} does not exist", file=sys.stderr)
@@ -193,12 +206,12 @@ def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
     # frame = cv2.resize(frame, reference_dims)
     # print(frame.shape)
 
-    markers = findAruco(frame, detector, draw=False)
+    markers = findAruco(args, frame, detector)
 
     if not markers:
         print("No markers found.")
         # sys.exit(1)
-        return None
+        return None, None, None
 
     # if len(markers) != len(reference_markers):
     # print(f"Found {len(markers)}/{len(reference_markers)} markers")
@@ -213,24 +226,20 @@ def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
                            for k in sorted(markers.keys())])
     except KeyError as e:
         print(f"found invalid marker id: {e}")
-        return None
+        return None, None, None
 
     if len(markers) < 2:
         print("Not enough markers found")
-        return None
+        return None, None, None
 
     print(f"Found {len(markers)}/{len(reference_markers)} valid markers")
-
-
-
 
     matrix, _ = cv2.findHomography(np.array(src_pts), np.array(dst_pts))
     warped = cv2.warpPerspective(frame, matrix, reference_dims)
 
-    # cv2.imshow("warped", warped)
-    # cv2.waitKey(0)
-    # cv2.imshow("Image", warped)
-    # cv2.waitKey(0)
+    if args.show_warped:
+        cv2.imshow("warped", warped)
+        cv2.waitKey(0)
 
     # channel_mask_img = skimage.io.imread("Looper Channel 1 Mask.png")
     # channel_mask_img = cv2.cvtColor(channel_mask_img, cv2.COLOR_RGBA2BGR)
@@ -245,14 +254,35 @@ def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
     roi = masked_img[mask_roi[0][1]:mask_roi[1][1], mask_roi[0][0]:mask_roi[1][0]]
     # hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-    # cv2.imshow("ROI", roi)
-    # cv2.waitKey(0)
+    if args.show_roi:
+        cv2.imshow("ROI", roi)
+        cv2.waitKey(0)
 
     # output_file = Path("frames_button") / input_file.name
     # cv2.imwrite(str(output_file), roi)
 
-    cluster(args, roi)
-    return roi
+    # roi[:, :, 0] = 0
+    # roi[:, :, 1] = 0
+    # roi[:, :, 2] = 0
+
+    # cv2.imshow("ROI", roi)
+    # cv2.waitKey(0)
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    threshold = 100
+    _, mask = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+
+    masked = cv2.bitwise_and(roi, roi, mask=mask)
+    # cv2.imshow("roi", roi)
+    # cv2.imshow("masked", masked)
+    # cv2.waitKey(0)
+
+    avgbright = np.mean(cv2.bitwise_and(gray, gray, mask=mask))
+    dominant = cluster(args, masked)
+    # print(f"{avgbright=}")
+    # print(f"{dominant=}")
+
+    return roi, avgbright, dominant
 
     asgrey = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
@@ -362,6 +392,41 @@ def parse_args() -> argparse.Namespace:
         help="image file(s) to process"
     )
 
+    parser.add_argument(
+        "--show-aruco",
+        default=False,
+        action="store_true",
+        help="show detected aruco markers"
+    )
+
+    parser.add_argument(
+        "--show-warped",
+        default=False,
+        action="store_true",
+        help="show warped image after marker detection"
+    )
+
+    parser.add_argument(
+        "--show-roi",
+        default=False,
+        action="store_true",
+        help="show masked and cropped region of interest"
+    )
+
+    parser.add_argument(
+        "--show-clusters",
+        default=False,
+        action="store_true",
+        help="show colors after clustering",
+    )
+
+    parser.add_argument(
+        "--show-all",
+        default=False,
+        action="store_true",
+        help="show all intermediate images",
+    )
+
     # parser.add_argument(
     #     "--credentials-file", "-c",
     #     type=Path,
@@ -395,13 +460,19 @@ def parse_args() -> argparse.Namespace:
 
     parsed_args = parser.parse_args()
 
+    if parsed_args.show_all:
+        parsed_args.show_aruco = True
+        parsed_args.show_warped = True
+        parsed_args.show_roi = True
+        parsed_args.show_clusters = True
+
     return parsed_args
 
 
 def main():
     args = parse_args()
 
-    key = getattr(aruco, 'DICT_APRILTAG_16h5')
+    key = aruco.DICT_APRILTAG_16h5
     arucoDict = aruco.getPredefinedDictionary(key)
     arucoParam = aruco.DetectorParameters()
 
@@ -434,13 +505,34 @@ def main():
 
         frame = skimage.io.imread(str(file))
         frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-        color_frame = do_frame(args, frame, detector, reference_markers, mask_img, mask1_roi)
+        roi, avgbright, dominant = do_frame(args, frame, detector, reference_markers, mask_img, mask1_roi)
+
+        if roi is None:
+            continue
+
+        print(f"{avgbright=}")
+        print(f"{dominant=}")
+
+        if dominant is not None:
+            hsv = colorsys.rgb_to_hsv(dominant[0]/255, dominant[1]/255, dominant[2]/255)
+            # hls = colorsys.rgb_to_hls(dominant[0]/255, dominant[1]/255, dominant[2]/255)
+            print(f"{hsv=}")
+            # print(f"{hls=}")
 
         # cv2.imshow("ROI", color_frame)
         # cv2.waitKey(1000)
-        if color_frame is not None:
-            output_file = Path("frames_button") / file.name
-            cv2.imwrite(str(output_file), color_frame)
+        if roi is not None:
+            if dominant is None:
+                output_file = Path("frames_weird") / file.name
+            elif avgbright < 35:
+                output_file = Path("frames_dark") / str(str(int(avgbright)) + "_" + file.name)
+            elif 0 < hsv[0] < (50/360):
+                output_file = Path("frames_red") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+            elif (100/360) < hsv[0] < (180/360):
+                output_file = Path("frames_green") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+            else:
+                output_file = Path("frames_unknown") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+            cv2.imwrite(str(output_file), roi)
         # print(args)
         # do(args)
 
