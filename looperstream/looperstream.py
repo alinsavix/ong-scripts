@@ -28,11 +28,28 @@ def log(msg: str) -> None:
     sys.stderr.flush()
 
 
+def config_camera(script: Path, device: Path):
+    config_cmd = [
+        script, device
+    ]
+
+    log("INFO: running camera configuration script")
+
+    try:
+        subprocess.run(config_cmd, shell=False, check=True, timeout=15)
+        log("INFO: Camera configuration script completed ok")
+    except subprocess.TimeoutExpired:
+        log(f"WARNING: Camera configuration script '{script}' timed out")
+    except subprocess.CalledProcessError as e:
+        log(f"WARNING: Camera config script exited with an error: {e}")
+    except Exception as e:
+        log(f"WARNING: Camera config script execution failed with unknown error: {e}")
+
+
 subproc = None
 
 def run_ffmpeg(args: argparse.Namespace):
     global subproc
-
 
     drawtext_conf = "font=mono:fontsize=48:y=h-text_h-15:box=1:boxcolor=black:boxborderw=10:fontcolor=white:expansion=normal"
 
@@ -120,12 +137,12 @@ def get_webhook_url(cfgfile: Path) -> str:
 
 # send a message to discord, of a given type, but only if the last
 # message of that type was different
-def send_discord(webhook_url: Optional[str], msg_type: str, msg: str) -> None:
+def send_discord(args: argparse.Namespace, webhook_url: Optional[str], msg_type: str, msg: str) -> None:
     # a stupid trick for persistent function variables
     if not hasattr(send_discord, "last_sent"):
         send_discord.last_sent = {}  # msg type -> message
 
-    if webhook_url is None:
+    if args.force or webhook_url is None:
         return
 
     checkfile = Path(__file__).parent / "no_discord"
@@ -178,8 +195,11 @@ def connect_obs(host: str, port: int) -> obs.ReqClient:
 
 
 # returns true if we're streaming
-def get_streaming(args: argparse.Namespace) -> bool:
+def check_streaming(args: argparse.Namespace) -> bool:
     global client
+
+    if args.force:
+        return True
 
     if client is None:
         client = connect_obs(args.host, args.port)
@@ -312,6 +332,21 @@ def parse_args() -> argparse.Namespace:
         help="file with discord credentials"
     )
 
+    parser.add_argument(
+        "--camera-config-script",
+        type=Path,
+        default=None,
+        action=CheckFile(must_exist=True),
+        help="script to execute to configure camera after it has been opened"
+    )
+
+    parser.add_argument(
+        "--force",
+        default=False,
+        action="store_true",
+        help="force streaming even if OBS is not streaming"
+    )
+
     return parser.parse_args()
 
 
@@ -336,13 +371,17 @@ def main():
         time.sleep(5)
 
         if state == "WAITING":
-            if get_streaming(args):
+            if check_streaming(args):
                 log("INFO: OBS is streaming, starting ffmpeg")
-                send_discord(webhook_url, "status", "Stream online, starting looper stream")
+                send_discord(args, webhook_url, "status",
+                             "Stream online, starting looper stream")
                 run_ffmpeg(args)
                 state = "STREAMING"
+                if args.camera_config_script:
+                    time.sleep(10)  # this sucks
+                    config_camera(args.camera_config_script, args.camera_device)
                 if args.timecode_scene is not None:
-                    time.sleep(30)   # this sucks
+                    time.sleep(30)  # this also sucks
                     uptime = get_obs_uptime(args.host, args.port)
                     if uptime is not None and uptime > 25 and uptime < 300:
                         play_source(args, args.timecode_scene, args.timecode_source)
@@ -351,14 +390,14 @@ def main():
             if not check_ffmpeg():
                 # ffmpeg has died, sigh
                 log("WARNING: ffmpeg died when we didn't expect it, restarting")
-                send_discord(webhook_url, "status",
+                send_discord(args, webhook_url, "status",
                              "Unexpected termination of looper stream (will retry)")
                 state = "WAITING"  # will restart next check
                 continue
 
-            if not get_streaming(args):
+            if not check_streaming(args):
                 log("INFO: OBS has stopped streaming, entering cooldown")
-                send_discord(webhook_url, "status", "Stream offline, starting cooldown")
+                send_discord(args, webhook_url, "status", "Stream offline, starting cooldown")
                 cooldown_start = time.time()
                 state = "COOLDOWN"
                 continue
@@ -366,9 +405,9 @@ def main():
         elif state == "COOLDOWN":
             # Are we streaming again? If so, just go straight back into
             # streaming
-            if get_streaming(args):
+            if check_streaming(args):
                 log("INFO: OBS is streaming again, continuing")
-                send_discord(webhook_url, "status",
+                send_discord(args, webhook_url, "status",
                              "Stream back online, continuing with looper stream")
                 state = "STREAMING"
                 continue
@@ -376,7 +415,8 @@ def main():
             # Otherwise, we can be in cooldown for 5 mins before we kill ffmpeg
             if (time.time() - cooldown_start) > (5 * 60):
                 log("INFO: OBS cooldown has expired, killing ffmpeg")
-                send_discord(webhook_url, "status", "Cooldown ended, terminating looper stream")
+                send_discord(args, webhook_url, "status",
+                             "Cooldown ended, terminating looper stream")
                 kill_ffmpeg()
                 state = "WAITING"
 
