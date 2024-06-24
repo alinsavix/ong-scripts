@@ -12,7 +12,6 @@ import cv2
 import cv2.aruco as aruco
 import numpy as np
 import skimage
-from feature_matching import FeatureMatching
 from tdvutil import ppretty
 from vidgear.gears import WriteGear
 
@@ -60,6 +59,11 @@ reference_markers: Dict[int, MarkerCorners] = {
 
 reference_dims = (1280, 720)
 
+do_trace = False
+def trace(*args: Any):
+    if do_trace:
+        print("TRACE:", *args)  # should this go to stderr?
+
 
 def flatten(list_of_lists):
     return list(itertools.chain.from_iterable(list_of_lists))
@@ -67,24 +71,6 @@ def flatten(list_of_lists):
 
 def findAruco(args: argparse.Namespace, frame, detector: aruco.ArucoDetector) -> Optional[Dict[int, MarkerCorners]]:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    # key = getattr(aruco, 'DICT_APRILTAG_16h5')
-    # arucoDict = aruco.getPredefinedDictionary(key)
-    # arucoParam = aruco.DetectorParameters()
-
-    # # print(ppretty(arucoParam))
-    # arucoParam.minMarkerDistanceRate = 0.03
-    # arucoParam.adaptiveThreshConstant = 7
-    # arucoParam.adaptiveThreshWinSizeMin = 20
-    # arucoParam.adaptiveThreshWinSizeMax = 100
-    # arucoParam.adaptiveThreshWinSizeStep = 10
-    # # arucoParam.minMarkerPerimeterRate = 0.03
-    # # arucoParam.maxMarkerPerimeterRate = 4.0
-    # arucoParam.minMarkerPerimeterRate = 0.02
-    # arucoParam.maxMarkerPerimeterRate = 0.2
-    # arucoParam.polygonalApproxAccuracyRate = 0.03
-
-    # detector = aruco.ArucoDetector(arucoDict, arucoParam)
 
     bboxes, ids, rejected = detector.detectMarkers(gray)
 
@@ -94,7 +80,7 @@ def findAruco(args: argparse.Namespace, frame, detector: aruco.ArucoDetector) ->
     if len(bboxes) == 0:
         return None
 
-    markers: MarkerCorners = {}
+    markers: Dict[int, MarkerCorners] = {}
 
     ids = ids.flatten()
     for (markerCorner, markerID) in zip(bboxes, ids):
@@ -112,9 +98,7 @@ def findAruco(args: argparse.Namespace, frame, detector: aruco.ArucoDetector) ->
     if not args.show_aruco:
         return markers
 
-    for id, marker in markers.items():
-        # print(f"{id=}")
-        # print(f"{marker=}")
+    for mid, marker in markers.items():
         # draw the bounding box of the ArUCo detection
         cv2.line(frame, marker.UL, marker.UR, (255, 255, 0), 4)
         cv2.line(frame, marker.UR, marker.BR, (0, 255, 0), 4)
@@ -128,7 +112,7 @@ def findAruco(args: argparse.Namespace, frame, detector: aruco.ArucoDetector) ->
         cv2.circle(frame, (cX, cY), 4, (0, 0, 255), -1)
 
         # draw the ArUco marker ID on the image
-        cv2.putText(frame, str(id),
+        cv2.putText(frame, str(mid),
                     (marker.UL[0], marker.UL[1] - 15), cv2.FONT_HERSHEY_SIMPLEX,
                     0.5, (0, 255, 0), 2)
 
@@ -146,8 +130,7 @@ def cluster(args: argparse.Namespace, frame: cv2.typing.MatLike):
     _, labels, centers = cv2.kmeans(pixels.astype(np.float32), k,
                                     None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
 
-    if args.show_clusters:
-        print(f"centers={centers.astype(int)}")
+    # trace(f"cluster centers={centers.astype(int)}")
 
     # remove the most dominant color, which is going to be black. If it's
     # NOT black, we have a problem.
@@ -156,7 +139,7 @@ def cluster(args: argparse.Namespace, frame: cv2.typing.MatLike):
 
     # Return early if black isn't the most dominant color
     if not np.array_equal(centers[maxindex], [0, 0, 0]):
-        # print("Black is not the most common color, problem")
+        # trace("Black is not the most dominant color, not doing clustering")
         return None
 
     bincounts = np.delete(bincounts, maxindex)
@@ -165,13 +148,6 @@ def cluster(args: argparse.Namespace, frame: cv2.typing.MatLike):
     # What's left should have an actual color as the most common thing
     maxindex = np.argmax(bincounts)
     dominant_color = centers[maxindex]
-    # print(f"{dominant_color=}")
-    # dominant_color = centers[np.argmax(np.bincount(labels.flatten()))]
-    # x = -np.sort(-np.bincount(labels.flatten()))
-    # print(f"{x=}")
-    # for c in centers:
-    #     print(c)
-    # print(dominant_color)
 
     if args.show_clusters:
         hist = np.zeros(k)
@@ -209,7 +185,7 @@ def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
     markers = findAruco(args, frame, detector)
 
     if not markers:
-        print("No markers found.")
+        trace("No markers found.")
         # sys.exit(1)
         return None, None, None
 
@@ -232,7 +208,7 @@ def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
         print("Not enough markers found")
         return None, None, None
 
-    print(f"Found {len(markers)}/{len(reference_markers)} valid markers")
+    trace(f"Found {len(markers)}/{len(reference_markers)} valid markers")
 
     matrix, _ = cv2.findHomography(np.array(src_pts), np.array(dst_pts))
     warped = cv2.warpPerspective(frame, matrix, reference_dims)
@@ -282,6 +258,10 @@ def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
     # print(f"{avgbright=}")
     # print(f"{dominant=}")
 
+    if dominant is None:
+        return None, None, None
+
+    # else
     return roi, avgbright, dominant
 
     asgrey = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -381,7 +361,8 @@ def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Share to discord some of the changes ojbpm has detected")
+        description="Share to discord some of the changes ojbpm has detected",
+    )
 
     parser.add_argument(
         "filenames",
@@ -389,28 +370,28 @@ def parse_args() -> argparse.Namespace:
         # action="append",
         nargs="+",
         metavar="filename",
-        help="image file(s) to process"
+        help="image file(s) to process",
     )
 
     parser.add_argument(
         "--show-aruco",
         default=False,
         action="store_true",
-        help="show detected aruco markers"
+        help="show detected aruco markers",
     )
 
     parser.add_argument(
         "--show-warped",
         default=False,
         action="store_true",
-        help="show warped image after marker detection"
+        help="show warped image after marker detection",
     )
 
     parser.add_argument(
         "--show-roi",
         default=False,
         action="store_true",
-        help="show masked and cropped region of interest"
+        help="show masked and cropped region of interest",
     )
 
     parser.add_argument(
@@ -425,6 +406,13 @@ def parse_args() -> argparse.Namespace:
         default=False,
         action="store_true",
         help="show all intermediate images",
+    )
+
+    parser.add_argument(
+        "--trace",
+        default=False,
+        action="store_true",
+        help="enable trace logging",
     )
 
     # parser.add_argument(
@@ -471,12 +459,16 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
+    if args.trace:
+        global do_trace
+        do_trace = True
 
+    # The dictionary we want to use
     key = aruco.DICT_APRILTAG_16h5
     arucoDict = aruco.getPredefinedDictionary(key)
-    arucoParam = aruco.DetectorParameters()
 
-    # print(ppretty(arucoParam))
+    # Parameters only need to be set once, create the struct and reuse it
+    arucoParam = aruco.DetectorParameters()
     arucoParam.minMarkerDistanceRate = 0.03
     arucoParam.adaptiveThreshConstant = 7
     arucoParam.adaptiveThreshWinSizeMin = 20
@@ -488,53 +480,111 @@ def main():
     arucoParam.maxMarkerPerimeterRate = 0.2
     arucoParam.polygonalApproxAccuracyRate = 0.03
 
-    # FIXME: Should we pass findAruco() the detector object, or the dict/params?
+    # Make a detector object to reuse
     detector = aruco.ArucoDetector(arucoDict, arucoParam)
 
+    # Load the reference map for the specific image area we care about
     mask_img = skimage.io.imread("Looper Channel 1 Mask.png")
     mask_img = cv2.cvtColor(mask_img, cv2.COLOR_RGBA2BGR)
 
-    # def do_frame(args: argparse.Namespace, detector: aruco.ArucoDetector,
-    #             ref_markers: Dict[int, MarkerCorners], mask_img: cv2.typing.MatLike,
-    #             mask_roi: Tuple[Point, Point]) -> None:
-    if args.filenames[0].is_dir():
-        args.filenames = args.filenames[0].glob("*.jpg")
+    if args.filenames[0].suffix in [".mp4", ".mkv", ".flv", "mjpeg"]:
+        cap = cv2.VideoCapture(str(args.filenames[0]))
+        cap.set(cv2.CAP_PROP_POS_MSEC, 1000 * 60 * 60 * 3)
+        framenum = -1
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-    for file in args.filenames:
-        print(f"{file}: ", end="")
+            framenum += 1
 
-        frame = skimage.io.imread(str(file))
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-        roi, avgbright, dominant = do_frame(args, frame, detector, reference_markers, mask_img, mask1_roi)
+            print(f"Frame {framenum}: ", end="")
 
-        if roi is None:
-            continue
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+            roi, avgbright, dominant = do_frame(
+                args, frame, detector, reference_markers, mask_img, mask1_roi)
 
-        print(f"{avgbright=}")
-        print(f"{dominant=}")
+            if roi is None:
+                continue
 
-        if dominant is not None:
-            hsv = colorsys.rgb_to_hsv(dominant[0]/255, dominant[1]/255, dominant[2]/255)
-            # hls = colorsys.rgb_to_hls(dominant[0]/255, dominant[1]/255, dominant[2]/255)
-            print(f"{hsv=}")
-            # print(f"{hls=}")
+            output_file = None
 
-        # cv2.imshow("ROI", color_frame)
-        # cv2.waitKey(1000)
-        if roi is not None:
-            if dominant is None:
-                output_file = Path("frames_weird") / file.name
-            elif avgbright < 35:
-                output_file = Path("frames_dark") / str(str(int(avgbright)) + "_" + file.name)
-            elif 0 < hsv[0] < (50/360):
-                output_file = Path("frames_red") / str(str(int(hsv[0] * 360)) + "_" + file.name)
-            elif (100/360) < hsv[0] < (180/360):
-                output_file = Path("frames_green") / str(str(int(hsv[0] * 360)) + "_" + file.name)
-            else:
-                output_file = Path("frames_unknown") / str(str(int(hsv[0] * 360)) + "_" + file.name)
-            cv2.imwrite(str(output_file), roi)
-        # print(args)
-        # do(args)
+            assert avgbright is not None
+            assert dominant is not None
+            trace(f"average brightness: {avgbright}")
+            trace(f"dominant color: {dominant}")
+
+            if dominant is not None:
+                hsv = colorsys.rgb_to_hsv(dominant[0]/255, dominant[1]/255, dominant[2]/255)
+                trace(f"dominant color (HSV): {[float(x) for x in hsv]}")
+                if (framenum % 100) == 0:
+                    print(f"dominant color (HSV): {[float(x) for x in hsv]}")
+
+            if roi is not None:
+                if dominant is None:
+                    print("weird")
+                    if (framenum % 100) == 0:
+                        output_file = Path(f"frames/frame{framenum:07d}_weird.jpg")
+                elif avgbright < 35:
+                    print("unlit")
+                    if (framenum % 100) == 0:
+                        output_file = Path(f"frames/frame{framenum:07d}_unlit.jpg")
+                    # output_file = Path("frames_dark") / str(str(int(avgbright)) + "_" + file.name)
+                elif 0 < hsv[0] < (50/360):
+                    print("red")
+                    if (framenum % 100) == 0:
+                        output_file = Path(f"frames/frame{framenum:07d}_red.jpg")
+                    # output_file = Path("frames_red") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+                elif (100/360) < hsv[0] < (200/360):
+                    print("green")
+                    if (framenum % 100) == 0:
+                        output_file = Path(f"frames/frame{framenum:07d}_green.jpg")
+                    # output_file = Path("frames_green") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+                else:
+                    print("unknown")
+                    if (framenum % 100) == 0:
+                        output_file = Path(f"frames/frame{framenum:07d}_unknown.jpg")
+                    # output_file = Path("frames_unknown") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+
+            if output_file is not None:
+                cv2.imwrite(str(output_file), cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+        return
+    else:
+        if args.filenames[0].is_dir():
+            args.filenames = args.filenames[0].glob("*.jpg")
+
+        for file in args.filenames:
+            print(f"{file}: ", end="")
+
+            frame = skimage.io.imread(str(file))
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+            roi, avgbright, dominant = do_frame(args, frame, detector, reference_markers, mask_img, mask1_roi)
+
+            if roi is None:
+                continue
+            assert avgbright is not None
+            assert dominant is not None
+
+            trace(f"average brightness: {avgbright}")
+            trace(f"dominant color: {dominant}")
+
+            if dominant is not None:
+                hsv = colorsys.rgb_to_hsv(dominant[0]/255, dominant[1]/255, dominant[2]/255)
+                trace(f"dominant color (HSV): {[float(x) for x in hsv]}")
+
+            if roi is not None:
+                if dominant is None:
+                    output_file = Path("frames_weird") / file.name
+                elif avgbright < 35:
+                    output_file = Path("frames_dark") / str(str(int(avgbright)) + "_" + file.name)
+                elif 0 < hsv[0] < (50/360):
+                    output_file = Path("frames_red") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+                elif (100/360) < hsv[0] < (180/360):
+                    output_file = Path("frames_green") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+                else:
+                    output_file = Path("frames_unknown") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+                cv2.imwrite(str(output_file), roi)
 
 
 if __name__ == "__main__":
