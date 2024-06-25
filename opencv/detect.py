@@ -374,6 +374,20 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--frame-stride",
+        type=int,
+        default=10,
+        help="number of frames to skip between probing",
+    )
+
+    parser.add_argument(
+        "--save-frame-every",
+        type=int,
+        default=10,
+        help="save every Nth processed frame",
+    )
+
+    parser.add_argument(
         "--show-aruco",
         default=False,
         action="store_true",
@@ -491,6 +505,7 @@ def main():
         cap = cv2.VideoCapture(str(args.filenames[0]))
         cap.set(cv2.CAP_PROP_POS_MSEC, 1000 * 60 * 60 * 3)
         framenum = -1
+        processed_frames = 0
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
@@ -498,7 +513,21 @@ def main():
 
             framenum += 1
 
+            if framenum > 10000:
+                sys.exit(0)
+
+            if framenum % args.frame_stride != 0:
+                continue
+
             print(f"Frame {framenum}: ", end="")
+
+            frame_offset = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+
+            processed_frames += 1
+            if (processed_frames % args.save_frame_every) == 0:
+                traceframe = True
+            else:
+                traceframe = False
 
             frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
             roi, avgbright, dominant = do_frame(
@@ -508,6 +537,7 @@ def main():
                 continue
 
             output_file = None
+            disposition = None
 
             assert avgbright is not None
             assert dominant is not None
@@ -515,38 +545,41 @@ def main():
             trace(f"dominant color: {dominant}")
 
             if dominant is not None:
-                hsv = colorsys.rgb_to_hsv(dominant[0]/255, dominant[1]/255, dominant[2]/255)
+                hsv = colorsys.rgb_to_hsv(
+                    dominant[2] / 255, dominant[1] / 255, dominant[0] / 255)
                 trace(f"dominant color (HSV): {[float(x) for x in hsv]}")
-                if (framenum % 100) == 0:
-                    print(f"dominant color (HSV): {[float(x) for x in hsv]}")
+                if traceframe:
+                    print(f"avgbright: {avgbright}, dominant color (HSV): {[float(x) for x in hsv]}")
 
             if roi is not None:
                 if dominant is None:
-                    print("weird")
-                    if (framenum % 100) == 0:
+                    disposition = "weird"
+                    if traceframe:
                         output_file = Path(f"frames/frame{framenum:07d}_weird.jpg")
                 elif avgbright < 35:
-                    print("unlit")
-                    if (framenum % 100) == 0:
+                    disposition = "unlit"
+                    if traceframe:
                         output_file = Path(f"frames/frame{framenum:07d}_unlit.jpg")
                     # output_file = Path("frames_dark") / str(str(int(avgbright)) + "_" + file.name)
-                elif 0 < hsv[0] < (50/360):
-                    print("red")
-                    if (framenum % 100) == 0:
+                elif 0 < hsv[0] < (80 / 360):
+                    disposition = "red"
+                    if traceframe:
                         output_file = Path(f"frames/frame{framenum:07d}_red.jpg")
                     # output_file = Path("frames_red") / str(str(int(hsv[0] * 360)) + "_" + file.name)
-                elif (100/360) < hsv[0] < (200/360):
-                    print("green")
-                    if (framenum % 100) == 0:
+                elif (100 / 360) < hsv[0] < (200 / 360):
+                    disposition = "green"
+                    if traceframe:
                         output_file = Path(f"frames/frame{framenum:07d}_green.jpg")
                     # output_file = Path("frames_green") / str(str(int(hsv[0] * 360)) + "_" + file.name)
                 else:
-                    print("unknown")
-                    if (framenum % 100) == 0:
+                    disposition = "unknown"
+                    if traceframe:
                         output_file = Path(f"frames/frame{framenum:07d}_unknown.jpg")
                     # output_file = Path("frames_unknown") / str(str(int(hsv[0] * 360)) + "_" + file.name)
 
+            print(disposition)
             if output_file is not None:
+                print(f"SAVING to {output_file}")
                 cv2.imwrite(str(output_file), cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
         return
@@ -559,7 +592,8 @@ def main():
 
             frame = skimage.io.imread(str(file))
             frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-            roi, avgbright, dominant = do_frame(args, frame, detector, reference_markers, mask_img, mask1_roi)
+            roi, avgbright, dominant = do_frame(
+                args, frame, detector, reference_markers, mask_img, mask1_roi)
 
             if roi is None:
                 continue
@@ -570,20 +604,25 @@ def main():
             trace(f"dominant color: {dominant}")
 
             if dominant is not None:
-                hsv = colorsys.rgb_to_hsv(dominant[0]/255, dominant[1]/255, dominant[2]/255)
+                hsv = colorsys.rgb_to_hsv(
+                    dominant[0] / 255, dominant[1] / 255, dominant[2] / 255)
                 trace(f"dominant color (HSV): {[float(x) for x in hsv]}")
 
             if roi is not None:
                 if dominant is None:
                     output_file = Path("frames_weird") / file.name
                 elif avgbright < 35:
-                    output_file = Path("frames_dark") / str(str(int(avgbright)) + "_" + file.name)
-                elif 0 < hsv[0] < (50/360):
-                    output_file = Path("frames_red") / str(str(int(hsv[0] * 360)) + "_" + file.name)
-                elif (100/360) < hsv[0] < (180/360):
-                    output_file = Path("frames_green") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+                    output_file = Path("frames_dark") / \
+                        str(str(int(avgbright)) + "_" + file.name)
+                elif 0 < hsv[0] < (50 / 360):
+                    output_file = Path("frames_red") / \
+                        str(str(int(hsv[0] * 360)) + "_" + file.name)
+                elif (100 / 360) < hsv[0] < (180 / 360):
+                    output_file = Path("frames_green") / \
+                        str(str(int(hsv[0] * 360)) + "_" + file.name)
                 else:
-                    output_file = Path("frames_unknown") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+                    output_file = Path("frames_unknown") / \
+                        str(str(int(hsv[0] * 360)) + "_" + file.name)
                 cv2.imwrite(str(output_file), roi)
 
 
