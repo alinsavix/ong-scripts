@@ -166,21 +166,8 @@ def cluster(args: argparse.Namespace, frame: cv2.typing.MatLike):
 
 
 def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
-             detector: aruco.ArucoDetector, ref_markers: Dict[int, MarkerCorners],
+             detector: aruco.ArucoDetector, matrix,
              mask_img: cv2.typing.MatLike, mask_roi: Tuple[Point, Point]):
-    # input_file = Path(sys.argv[1])
-    # if not input_file.exists():
-    #     print(f"ERROR: File {input_file} does not exist", file=sys.stderr)
-    #     sys.exit(1)
-
-    # print(f"{input_file}: ", end="")
-
-    # frame = skimage.io.imread(input_file)
-    # frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-    # frame = cv2.imread(sys.argv[1])
-
-    # frame = cv2.resize(frame, reference_dims)
-    # print(frame.shape)
 
     markers = findAruco(args, frame, detector)
 
@@ -189,28 +176,23 @@ def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
         # sys.exit(1)
         return None, None, None
 
-    # if len(markers) != len(reference_markers):
-    # print(f"Found {len(markers)}/{len(reference_markers)} markers")
-    # sys.exit(1)
-    # else:
-    #     print(f"found correct number ({len(reference_markers)}) of markers")
+    # try:
+    #     dst_pts = flatten([ref_markers[k].as_array()
+    #                        for k in sorted(markers.keys())])
+    #     src_pts = flatten([markers[k].as_array()
+    #                        for k in sorted(markers.keys())])
+    # except KeyError as e:
+    #     print(f"found invalid marker id: {e}")
+    #     return None, None, None
 
-    try:
-        dst_pts = flatten([ref_markers[k].as_array()
-                           for k in sorted(markers.keys())])
-        src_pts = flatten([markers[k].as_array()
-                           for k in sorted(markers.keys())])
-    except KeyError as e:
-        print(f"found invalid marker id: {e}")
-        return None, None, None
+    # if len(markers) < 2:
+    #     print("Not enough markers found")
+    #     return None, None, None
 
-    if len(markers) < 2:
-        print("Not enough markers found")
-        return None, None, None
+    # trace(f"Found {len(markers)}/{len(reference_markers)} valid markers")
 
-    trace(f"Found {len(markers)}/{len(reference_markers)} valid markers")
+    # matrix, _ = cv2.findHomography(np.array(src_pts), np.array(dst_pts))
 
-    matrix, _ = cv2.findHomography(np.array(src_pts), np.array(dst_pts))
     warped = cv2.warpPerspective(frame, matrix, reference_dims)
 
     if args.show_warped:
@@ -359,6 +341,70 @@ def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
     out.close()
     cv2.destroyAllWindows()
 
+
+def find_matrix_from_image(args: argparse.Namespace, frame, detector: aruco.ArucoDetector, ref_markers: Dict[int, MarkerCorners], min_markers=3):
+    # do we actually need this? Could we convert straight to gray?
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+
+    markers = findAruco(args, frame, detector)
+    if not markers:
+        return None
+
+    if len(markers) < min_markers:
+        return None
+
+    try:
+        dst_pts = flatten([ref_markers[k].as_array()
+                            for k in sorted(markers.keys())])
+        src_pts = flatten([markers[k].as_array()
+                            for k in sorted(markers.keys())])
+    except KeyError as e:
+        # print(f"found invalid marker id: {e}")
+        # return None, None, None
+        return None
+
+    matrix, _ = cv2.findHomography(np.array(src_pts), np.array(dst_pts))
+    if matrix is None:
+        return None
+
+    # Otherwise, return the matrix
+    return matrix
+
+
+# find_matrix(args, args.filenames[0], detector, reference_markers)
+def find_matrix_from_video(args: argparse.Namespace, filename: Path, detector: aruco.ArucoDetector, ref_markers: Dict[int, MarkerCorners], min_markers=3):
+    # FIXME: can we use this with a context handler?
+    cap = cv2.VideoCapture(str(args.filenames[0]))
+    # skip in just a little to make sure the camera has been configured and such
+    # cap.set(cv2.CAP_PROP_POS_MSEC, 5 * 60)
+
+    print("Finding initial homography...")
+
+    framenum = -1
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            return None
+
+        framenum += 1
+
+        # FIXME: what's a good number of frames to check?
+        if framenum > 10000:
+            sys.exit(0)
+
+        matrix = find_matrix_from_image(args, frame, detector, ref_markers, min_markers)
+        if matrix is None:
+            continue
+
+        # Okay, got a matrix, that's what we need to warp the image
+        print(f"Found homography matrix at frame {framenum}")
+        cap.release()
+        return matrix
+
+    cap.release()
+    return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Share to discord some of the changes ojbpm has detected",
@@ -502,6 +548,11 @@ def main():
     mask_img = cv2.cvtColor(mask_img, cv2.COLOR_RGBA2BGR)
 
     if args.filenames[0].suffix in [".mp4", ".mkv", ".flv", "mjpeg"]:
+        matrix = find_matrix_from_video(args, args.filenames[0], detector, reference_markers)
+        if matrix is None:
+            print("No valid homography matrix found in video, can't continue.")
+            sys.exit(1)
+
         cap = cv2.VideoCapture(str(args.filenames[0]))
         cap.set(cv2.CAP_PROP_POS_MSEC, 1000 * 60 * 60 * 3)
         framenum = -1
@@ -519,19 +570,19 @@ def main():
             if framenum % args.frame_stride != 0:
                 continue
 
-            print(f"Frame {framenum}: ", end="")
+            # print(f"Frame {framenum}: ", end="")
 
             frame_offset = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
 
             processed_frames += 1
-            if (processed_frames % args.save_frame_every) == 0:
+            if args.save_frame_every > 0 and (processed_frames % args.save_frame_every) == 0:
                 traceframe = True
             else:
                 traceframe = False
 
             frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
             roi, avgbright, dominant = do_frame(
-                args, frame, detector, reference_markers, mask_img, mask1_roi)
+                args, frame, detector, matrix, mask_img, mask1_roi)
 
             if roi is None:
                 continue
@@ -548,38 +599,40 @@ def main():
                 hsv = colorsys.rgb_to_hsv(
                     dominant[2] / 255, dominant[1] / 255, dominant[0] / 255)
                 trace(f"dominant color (HSV): {[float(x) for x in hsv]}")
-                if traceframe:
-                    print(f"avgbright: {avgbright}, dominant color (HSV): {[float(x) for x in hsv]}")
+                # if traceframe:
+                #     print(f"avgbright: {avgbright}, dominant color (HSV): {[float(x) for x in hsv]}")
 
             if roi is not None:
                 if dominant is None:
-                    disposition = "weird"
+                    disposition = "!"
                     if traceframe:
                         output_file = Path(f"frames/frame{framenum:07d}_weird.jpg")
                 elif avgbright < 35:
-                    disposition = "unlit"
+                    disposition = "."
                     if traceframe:
                         output_file = Path(f"frames/frame{framenum:07d}_unlit.jpg")
                     # output_file = Path("frames_dark") / str(str(int(avgbright)) + "_" + file.name)
                 elif 0 < hsv[0] < (80 / 360):
-                    disposition = "red"
+                    disposition = "r"
                     if traceframe:
                         output_file = Path(f"frames/frame{framenum:07d}_red.jpg")
                     # output_file = Path("frames_red") / str(str(int(hsv[0] * 360)) + "_" + file.name)
                 elif (100 / 360) < hsv[0] < (200 / 360):
-                    disposition = "green"
+                    disposition = "g"
                     if traceframe:
                         output_file = Path(f"frames/frame{framenum:07d}_green.jpg")
                     # output_file = Path("frames_green") / str(str(int(hsv[0] * 360)) + "_" + file.name)
                 else:
-                    disposition = "unknown"
+                    disposition = "?"
                     if traceframe:
                         output_file = Path(f"frames/frame{framenum:07d}_unknown.jpg")
                     # output_file = Path("frames_unknown") / str(str(int(hsv[0] * 360)) + "_" + file.name)
 
-            print(disposition)
+            print(disposition, end="")
+            sys.stdout.flush()
+
             if output_file is not None:
-                print(f"SAVING to {output_file}")
+                # print(f"SAVING to {output_file}")
                 cv2.imwrite(str(output_file), cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
         return
