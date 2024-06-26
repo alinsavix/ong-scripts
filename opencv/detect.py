@@ -2,17 +2,20 @@
 import argparse
 import colorsys
 import itertools
+import re
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TypeAlias
 
 import cv2
 import cv2.aruco as aruco
 import numpy as np
+import pytesseract
 import skimage
-from tdvutil import ppretty
+from tdvutil import hms_to_sec, ppretty
 from vidgear.gears import WriteGear
 
 # FIXME: should these be int?
@@ -376,7 +379,7 @@ def find_matrix_from_video(args: argparse.Namespace, filename: Path, detector: a
     # FIXME: can we use this with a context handler?
     cap = cv2.VideoCapture(str(args.filenames[0]))
     # skip in just a little to make sure the camera has been configured and such
-    # cap.set(cv2.CAP_PROP_POS_MSEC, 5 * 60)
+    cap.set(cv2.CAP_PROP_POS_MSEC, 5 * 60)
 
     print("Finding initial homography...")
 
@@ -403,6 +406,57 @@ def find_matrix_from_video(args: argparse.Namespace, filename: Path, detector: a
 
     cap.release()
     return None
+
+
+# RTC 2024-06-25 12:14:45.904
+re_timestamp = re.compile(r"""
+    RTC
+    \s
+    (?P<full_timestamp>
+        (?P<year>\d{4}) - (?P<month>\d{2}) - (?P<day>\d{2})
+        \s
+        (?P<hour>\d{2}) : (?P<minute>\d{2}) : (?P<second>\d{2}) \. (?P<millisecond>\d{3})
+    )
+""", re.VERBOSE)
+
+
+# modeled after https://medium.com/nanonets/a-comprehensive-guide-to-ocr-with-tesseract-opencv-and-python-fd42f69e8ca8
+def ocr_timestamp(filename: Path, framenum: int):
+    trace(f"Reading timestamp from frame {framenum}")
+    cap = cv2.VideoCapture(str(filename))
+
+    if not cap.isOpened():
+        print("Can't open video file to read timestamp")
+        return None
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, framenum)
+
+    ret, frame = cap.read()
+    # cv2.imshow("frame", frame)
+    # cv2.waitKey(0)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    subimage = gray[660:710, 5:805]
+
+    # We probably don't actually *need* to do a threshold on the time text,
+    # but this will at least clean up any compression artifacting.
+    subimage = cv2.threshold(subimage, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+    # cv2.imshow("frame", thresholded)
+    # cv2.waitKey(0)
+
+    custom_config = r'--oem 3 --psm 6'
+    ocr = pytesseract.image_to_string(subimage, config=custom_config)
+
+    m = re_timestamp.match(ocr)
+    if not m:
+        print(f"OCR produced invalid timestamp: {ocr}")
+        return None
+
+    print(f"OCR'd timestamp string as: {ocr}")
+    full_timestamp = datetime.strptime(m.group("full_timestamp"), "%Y-%m-%d %H:%M:%S.%f")
+    # hms_timestamp = full_timestamp.strftime("%H:%M:%S.%f")
+    # secs = hms_to_sec(hms_timestamp)
+    return full_timestamp
 
 
 def parse_args() -> argparse.Namespace:
@@ -548,6 +602,9 @@ def main():
     mask_img = cv2.cvtColor(mask_img, cv2.COLOR_RGBA2BGR)
 
     if args.filenames[0].suffix in [".mp4", ".mkv", ".flv", "mjpeg"]:
+
+        timestamp = ocr_timestamp(args.filenames[0], 0)
+
         matrix = find_matrix_from_video(args, args.filenames[0], detector, reference_markers)
         if matrix is None:
             print("No valid homography matrix found in video, can't continue.")
