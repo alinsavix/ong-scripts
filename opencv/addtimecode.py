@@ -18,6 +18,10 @@ import skimage
 from tdvutil import hms_to_sec, ppretty
 from vidgear.gears import VideoGear, WriteGear
 
+# import tesserocr
+
+
+
 # FIXME: should these be int?
 Point: TypeAlias = Tuple[int, int]
 
@@ -432,35 +436,26 @@ re_timestamp = re.compile(r"""
 
 
 # modeled after https://medium.com/nanonets/a-comprehensive-guide-to-ocr-with-tesseract-opencv-and-python-fd42f69e8ca8
-def ocr_timestamp(filename: Path, framenum: int):
-    trace(f"Reading timestamp from frame {framenum}")
-    cap = cv2.VideoCapture(str(filename))
-
-    if not cap.isOpened():
-        print("Can't open video file to read timestamp")
-        return None
-
-    cap.set(cv2.CAP_PROP_POS_FRAMES, framenum)
-
-    ret, frame = cap.read()
-    # cv2.imshow("frame", frame)
-    # cv2.waitKey(0)
+def ocr_frame(frame: cv2.typing.MatLike) -> Optional[datetime]:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    subimage = gray[660:710, 5:805]
+    # subimage = gray[900:, :]  # Just the bottom ~200 pixels
+    subimage = gray
 
     # We probably don't actually *need* to do a threshold on the time text,
     # but this will at least clean up any compression artifacting.
     subimage = cv2.threshold(subimage, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
-    # cv2.imshow("frame", thresholded)
-    # cv2.waitKey(0)
+    # cv2.imshow("frame", subimage)
+    # cv2.waitKey(1)
 
     custom_config = r'--oem 3 --psm 6'
     ocr = pytesseract.image_to_string(subimage, config=custom_config)
+    # ocr = tesserocr.image_to_text(subimage.tobytes())
+    # print(f"ocr: {ocr}")
 
-    m = re_timestamp.match(ocr)
+    m = re_timestamp.search(ocr)
     if not m:
-        print(f"OCR produced invalid timestamp: {ocr}")
+        # print(f"OCR produced invalid timestamp: {ocr}")
         return None
 
     print(f"OCR'd timestamp string as: {ocr}")
@@ -468,6 +463,47 @@ def ocr_timestamp(filename: Path, framenum: int):
     # hms_timestamp = full_timestamp.strftime("%H:%M:%S.%f")
     # secs = hms_to_sec(hms_timestamp)
     return full_timestamp
+
+
+# returns (ocr'd timestamp, frame timestamp) tuple, or None,None if not found
+def find_timestamp_in_range(args: argparse.Namespace, filename: Path,
+                            start_time: float = 30.0, search_len: float = 15
+                            ) -> Tuple[Optional[float], Optional[float]]:
+    # frame_offset = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+    # cap.set(cv2.CAP_PROP_POS_MSEC, 30 * 1000)
+    cap = cv2.VideoCapture(str(args.filenames[0]), cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        # FIXME: Should probably throw an exception or something
+        print("Error opening video stream or file")
+        sys.exit(1)
+
+    cap.set(cv2.CAP_PROP_POS_MSEC, int(start_time * 1000))
+    # cap = VideoGear(source=str(args.filenames[0]), logging=True).start()
+
+    # print("Finding timestamp...", end="")
+    # sys.stdout.flush()
+
+    framenum = -1
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if frame is None:
+            return (None, None)
+
+        # print(len(frame))
+        framenum += 1
+
+        frame_ts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        if frame_ts > (start_time + search_len):
+            cap.release()
+            return (None, None)
+
+        ts = ocr_frame(frame)
+        if ts is not None:
+            cap.release()
+            return (ts.timestamp(), frame_ts)
+
+    cap.release()
+    return (None, None)
 
 
 def parse_args() -> argparse.Namespace:
@@ -484,61 +520,6 @@ def parse_args() -> argparse.Namespace:
         help="image file(s) to process",
     )
 
-    parser.add_argument(
-        "--frame-stride",
-        type=int,
-        default=10,
-        help="number of frames to skip between probing",
-    )
-
-    parser.add_argument(
-        "--homography-search-frames",
-        type=int,
-        default=10000,
-        help="number of frames search for initial homography",
-    )
-
-    parser.add_argument(
-        "--save-frame-every",
-        type=int,
-        default=10,
-        help="save every Nth processed frame",
-    )
-
-    parser.add_argument(
-        "--show-aruco",
-        default=False,
-        action="store_true",
-        help="show detected aruco markers",
-    )
-
-    parser.add_argument(
-        "--show-warped",
-        default=False,
-        action="store_true",
-        help="show warped image after marker detection",
-    )
-
-    parser.add_argument(
-        "--show-roi",
-        default=False,
-        action="store_true",
-        help="show masked and cropped region of interest",
-    )
-
-    parser.add_argument(
-        "--show-clusters",
-        default=False,
-        action="store_true",
-        help="show colors after clustering",
-    )
-
-    parser.add_argument(
-        "--show-all",
-        default=False,
-        action="store_true",
-        help="show all intermediate images",
-    )
 
     parser.add_argument(
         "--trace",
@@ -547,49 +528,88 @@ def parse_args() -> argparse.Namespace:
         help="enable trace logging",
     )
 
-    # parser.add_argument(
-    #     "--credentials-file", "-c",
-    #     type=Path,
-    #     default=None,
-    #     action=CheckFile(must_exist=True),
-    #     help="file with discord credentials"
-    # )
-
-    # parser.add_argument(
-    #     "--watch-dir",
-    #     type=Path,
-    #     default=None,
-    #     action=CheckFile(must_exist=True),
-    #     required=True,
-    #     help="ojbpm export path to watch for bpm changes",
-    # )
-
-    # parser.add_argument(
-    #     "--host",
-    #     type=str,
-    #     default=None,  # 192.168.1.152
-    #     help="address or hostname of host running OBS"
-    # )
-
-    # parser.add_argument(
-    #     "--port",
-    #     type=int,
-    #     default=4455,
-    #     help="port number for OBS websocket"
-    # )
-
     parsed_args = parser.parse_args()
-
-    if parsed_args.show_all:
-        parsed_args.show_aruco = True
-        parsed_args.show_warped = True
-        parsed_args.show_roi = True
-        parsed_args.show_clusters = True
 
     return parsed_args
 
 
 def main():
+    args = parse_args()
+    if args.trace:
+        global do_trace
+        do_trace = True
+
+    searches = [
+        (32, 5),
+        (27, 5),
+        (37, 5),
+        (42, 5),
+        (20, 7),
+        (42, 5),
+        (47, 13)
+    ]
+
+    ocr_ts = frame_ts = None
+
+    for search_start, search_len in searches:
+        (ocr_ts, frame_ts) = find_timestamp_in_range(
+            args, args.filenames[0], search_start, search_len)
+        if ocr_ts is not None:
+            break
+
+    if ocr_ts is None or frame_ts is None:
+        print("No timestamp found")
+        sys.exit(1)
+
+    starting_timestamp = ocr_ts - frame_ts
+    print(f"found {ocr_ts} at {frame_ts} => video starts at {starting_timestamp}")
+
+    sys.exit(0)
+
+    cap = cv2.VideoCapture(str(args.filenames[0]), cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        print("Error opening video stream or file")
+        sys.exit(1)
+
+    cap.set(cv2.CAP_PROP_POS_MSEC, 30 * 1000)
+    # print(cap.getBackendName())
+    # skip in just a little to make sure the camera has been configured and such
+    # cap.set(cv2.CAP_PROP_POS_MSEC, 5 * 60)
+
+    # cap = VideoGear(source=str(args.filenames[0]), logging=True).start()
+
+    print("Finding timestamp...", end="")
+    sys.stdout.flush()
+
+    framenum = -1
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if frame is None:
+            return None
+
+        framenum += 1
+        if framenum % 100 == 0:
+            print(".", end="")
+            sys.stdout.flush()
+
+        if framenum % 1000 == 0:
+            print("!", end="")
+
+        # print("frame")
+        # ret, frame = cap.read()
+        # if not ret:
+        #     return None
+
+        timestamp = ocr_frame(frame)
+        if timestamp is not None:
+            print(f"Found timestamp: {timestamp}")
+            sys.exit(0)
+
+    print("No timestamp found")
+    sys.exit(1)
+
+
+def main_old():
     args = parse_args()
     if args.trace:
         global do_trace

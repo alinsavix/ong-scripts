@@ -91,6 +91,7 @@ dmypy.json
 *.cache
 output/
 outputs/
+*.old
 
 tests/.coverage
 tests/htmlcov

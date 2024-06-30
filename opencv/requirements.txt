@@ -8,3 +8,4 @@ scikit-image
 tdvutil
 matplotlib
 pytesseract
+https://github.com/simonflueckiger/tesserocr-windows_build/releases/download/tesserocr-v2.7.0-tesseract-5.3.4/tesserocr-2.7.0-cp311-cp311-win_amd64.whl
