@@ -2,8 +2,11 @@
 import argparse
 import colorsys
 import itertools
+import os
 import re
+import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +19,7 @@ import numpy as np
 import pytesseract
 import skimage
 from tdvutil import hms_to_sec, ppretty
+from tdvutil.argparse import CheckFile, NegateAction
 from vidgear.gears import VideoGear, WriteGear
 
 # import tesserocr
@@ -79,6 +83,55 @@ def log(*args: Any):
 
 def flatten(list_of_lists):
     return list(itertools.chain.from_iterable(list_of_lists))
+
+# DOES NOT HANDLE DROP-FRAME TIMECODE!
+def sec_to_timecode(secs: float, fps: float) -> str:
+    return time.strftime('%H:%M:%S', time.localtime(secs)) + f":{int((secs % 1) * fps):02d}"
+
+
+# FIXME: Find a way to do this without a remux
+def remux_with_timecode(args: argparse.Namespace, vidfile: Path, ts: float, fps: float):
+    timecode = sec_to_timecode(ts, fps)
+
+    fh, _tmpfile = tempfile.mkstemp(suffix=vidfile.suffix, prefix="remux_", dir=vidfile.parent)
+    os.close(fh)
+
+    tmpfile = Path(_tmpfile)
+    log(f"remuxing w/ timecode using tmpfile {tmpfile}")
+
+    timeout = 30 * 60
+    try:
+        # print([
+        #     "ffmpeg", "-hide_banner",
+        #     "-i", vidfile, "-map", "0", "-map", "-0:d",
+        #     "-c", "copy", "-timecode", timecode, "-y", tmpfile])
+        subprocess.run([
+            "ffmpeg", "-hide_banner",
+            "-i", vidfile, "-map", "0", "-map", "-0:d", "-c", "copy",
+            "-timecode", timecode, "-video_track_timescale", "600",
+            "-y", tmpfile],
+            shell=False, stdin=subprocess.DEVNULL, check=True, timeout=timeout)
+    except FileNotFoundError:
+        log("ERROR: couldn't execute ffmpeg, please make sure it exists in your PATH")
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        log(f"ERROR: remux-with-timecode process timed out after {timeout} seconds")
+        tmpfile.unlink(missing_ok=True)
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        log(f"ERROR: remux-with-timecode process failed with ffmpeg exit code {e.returncode}")
+        tmpfile.unlink(missing_ok=True)
+        sys.exit(1)
+    except Exception:
+        log("ERROR: unknown error during remux-with-timecode process, aborting")
+        tmpfile.unlink(missing_ok=True)
+        sys.exit(1)
+
+    # seems like it ran ok, rename the temp file
+    log(f"DEBUG: replacing {vidfile} with {tmpfile}")
+    tmpfile.replace(vidfile)
+
+    log(f"\nDONE: completed remux-with-timecode to {vidfile}")
 
 
 def findAruco(args: argparse.Namespace, frame, detector: aruco.ArucoDetector) -> Optional[Dict[int, MarkerCorners]]:
@@ -465,10 +518,17 @@ def ocr_frame(frame: cv2.typing.MatLike) -> Optional[datetime]:
     return full_timestamp
 
 
+@dataclass
+class FoundTimestamps:
+    ocr_ts: float
+    frame_ts: float
+    fps: float
+
 # returns (ocr'd timestamp, frame timestamp) tuple, or None,None if not found
-def find_timestamp_in_range(args: argparse.Namespace, filename: Path,
-                            start_time: float = 30.0, search_len: float = 15
-                            ) -> Tuple[Optional[float], Optional[float]]:
+def find_timestamp_in_range(
+    args: argparse.Namespace, filename: Path,
+    start_time: float = 30.0, search_len: float = 15
+) -> Optional[FoundTimestamps]:
     # frame_offset = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
     # cap.set(cv2.CAP_PROP_POS_MSEC, 30 * 1000)
     cap = cv2.VideoCapture(str(args.filenames[0]), cv2.CAP_FFMPEG)
@@ -477,7 +537,11 @@ def find_timestamp_in_range(args: argparse.Namespace, filename: Path,
         print("Error opening video stream or file")
         sys.exit(1)
 
+    print(f"set frame offset to {start_time}")
     cap.set(cv2.CAP_PROP_POS_MSEC, int(start_time * 1000))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    # print(f"test framerate: {fps}")
+
     # cap = VideoGear(source=str(args.filenames[0]), logging=True).start()
 
     # print("Finding timestamp...", end="")
@@ -487,28 +551,31 @@ def find_timestamp_in_range(args: argparse.Namespace, filename: Path,
     while cap.isOpened():
         ret, frame = cap.read()
         if frame is None:
-            return (None, None)
+            return None
 
         # print(len(frame))
         framenum += 1
 
         frame_ts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        print(f"read frame at offset {frame_ts}")
         if frame_ts > (start_time + search_len):
             cap.release()
-            return (None, None)
+            return None
 
         ts = ocr_frame(frame)
         if ts is not None:
             cap.release()
-            return (ts.timestamp(), frame_ts)
+            return FoundTimestamps(ts.timestamp(), frame_ts, fps)
 
     cap.release()
-    return (None, None)
+    return None
 
+
+valid_extensions = {"mkv", "mp4", "flv"}
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Share to discord some of the changes ojbpm has detected",
+        description="Find a burned-in timecode and set the video's metadata to match",
     )
 
     parser.add_argument(
@@ -517,9 +584,9 @@ def parse_args() -> argparse.Namespace:
         # action="append",
         nargs="+",
         metavar="filename",
+        # action=CheckFile(extensions=valid_extensions, must_exist=True),
         help="image file(s) to process",
     )
-
 
     parser.add_argument(
         "--trace",
@@ -540,29 +607,34 @@ def main():
         do_trace = True
 
     searches = [
+        (5, 1),
+        (40, 2),
         (32, 5),
         (27, 5),
-        (37, 5),
+        (37, 3),
         (42, 5),
         (20, 7),
         (42, 5),
         (47, 13)
     ]
 
-    ocr_ts = frame_ts = None
+    timestamps = None
 
+    # (ocr_ts, frame_ts, fps)
     for search_start, search_len in searches:
-        (ocr_ts, frame_ts) = find_timestamp_in_range(
-            args, args.filenames[0], search_start, search_len)
-        if ocr_ts is not None:
+        timestamps = find_timestamp_in_range(args, args.filenames[0], search_start, search_len)
+        if timestamps is not None:
             break
 
-    if ocr_ts is None or frame_ts is None:
+    if timestamps is None:
         print("No timestamp found")
         sys.exit(1)
 
-    starting_timestamp = ocr_ts - frame_ts
-    print(f"found {ocr_ts} at {frame_ts} => video starts at {starting_timestamp}")
+    starting_timestamp = timestamps.ocr_ts - timestamps.frame_ts
+    print(f"found {timestamps.ocr_ts} at {timestamps.frame_ts} => video starts at {starting_timestamp}")
+    print(f"Video proports to be {timestamps.fps} fps")
+
+    remux_with_timecode(args, args.filenames[0], starting_timestamp, timestamps.fps)
 
     sys.exit(0)
 
