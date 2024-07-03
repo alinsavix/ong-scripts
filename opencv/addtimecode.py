@@ -16,7 +16,7 @@ import numpy as np
 import tesserocr
 from PIL import Image
 # import skimage
-from tdvutil import hms_to_sec, ppretty
+from tdvutil import hms_to_sec, ppretty, sec_to_timecode, timecode_to_sec
 from tdvutil.argparse import CheckFile, NegateAction
 
 # from vidgear.gears import VideoGear, WriteGear
@@ -76,17 +76,13 @@ def log(*args: Any):
     sys.stdout.flush()
 
 
-# DOES NOT HANDLE DROP-FRAME TIMECODE!
-def sec_to_timecode(secs: float, fps: float) -> str:
-    return time.strftime('%H:%M:%S', time.localtime(secs)) + f":{int((secs % 1) * fps):02d}"
-
-
 # FIXME: Find a way to do this without a remux. If there is one. It's vaguely
 # possible mp4box can do it (at least if there's an existing timecode chunk)
 # but I'm not smart enough to figure out how to do that. So... remux.
 #
 # FIXME: Only expected to work with integer framerates.
 def remux_with_timecode(args: argparse.Namespace, vidfile: Path, ts: float, fps: int):
+    ts = ts % (24 * 60 * 60)
     timecode = sec_to_timecode(ts, fps)
     timeout = 30 * 60
 
@@ -95,7 +91,7 @@ def remux_with_timecode(args: argparse.Namespace, vidfile: Path, ts: float, fps:
 
     tmpfile = Path(_tmpfile)
     # log(f"remuxing w/ timecode using tmpfile {tmpfile}")
-    log(f"REMUXING '{vidfile.name}' to add timecode metadata")
+    log(f"REMUXING '{vidfile.name}' to add timecode metadata of '{timecode}'")
 
     cmd = [
         "ffmpeg", "-hide_banner",
@@ -139,7 +135,9 @@ re_timestamp = re.compile(r"""
     (?P<full_timestamp>
         (?P<year>\d{4}) - (?P<month>\d{2}) - (?P<day>\d{2})
         \s
-        (?P<hour>\d{2}) : (?P<minute>\d{2}) : (?P<second>\d{2}) \. (?P<millisecond>\d{3})
+        (?P<time_only>
+            (?P<hour>\d{2}) : (?P<minute>\d{2}) : (?P<second>\d{2}) \. (?P<millisecond>\d{3})
+        )
     )
 """, re.VERBOSE)
 
@@ -147,7 +145,7 @@ re_timestamp = re.compile(r"""
 # modeled after https://medium.com/nanonets/a-comprehensive-guide-to-ocr-with-tesseract-opencv-and-python-fd42f69e8ca8
 
 ocrapi = None
-def ocr_frame(frame: cv2.typing.MatLike) -> Optional[datetime]:
+def ocr_frame(frame: cv2.typing.MatLike) -> Optional[float]:
     global ocrapi
 
     if ocrapi is None:
@@ -192,8 +190,8 @@ def ocr_frame(frame: cv2.typing.MatLike) -> Optional[datetime]:
         return None
 
     # print(f"OCR'd timestamp string as: {ocr}")
-    full_timestamp = datetime.strptime(m.group("full_timestamp"), "%Y-%m-%d %H:%M:%S.%f")
-    return full_timestamp
+    # full_timestamp = datetime.strptime(m.group("full_timestamp"), "%Y-%m-%d %H:%M:%S.%f")
+    return hms_to_sec(m.group("time_only"))
 
 
 @dataclass
@@ -241,8 +239,8 @@ def find_timestamp_in_range(
         ts = ocr_frame(frame)
         if ts is not None:
             cap.release()
-            print("")
-            return FoundTimestamps(ts.timestamp(), frame_ts, fps)
+            print(f"FOUND: {ts}")
+            return FoundTimestamps(ts, frame_ts, fps)
 
     cap.release()
     print("")
