@@ -384,7 +384,7 @@ def find_matrix_from_video_file(args: argparse.Namespace, filename: Path, detect
     # FIXME: can we use this with a context handler?
     cap = cv2.VideoCapture(str(args.filenames[0]))
     # skip in just a little to make sure the camera has been configured and such
-    cap.set(cv2.CAP_PROP_POS_MSEC, 5 * 60)
+    cap.set(cv2.CAP_PROP_POS_MSEC, args.homography_search_at * 1000)
 
     print("Finding initial homography...", end="")
     sys.stdout.flush()
@@ -396,9 +396,14 @@ def find_matrix_from_video_file(args: argparse.Namespace, filename: Path, detect
             return None
 
         framenum += 1
-        if framenum % 100 == 0:
-            print(".", end="")
-            sys.stdout.flush()
+        if framenum % 37 != 0:
+            continue
+
+        print(".", end="")
+        sys.stdout.flush()
+
+        # cv2.imshow("frame", frame)
+        # cv2.waitKey(1)
 
         # FIXME: what's a good number of frames to check?
         if framenum > args.homography_search_frames:
@@ -470,6 +475,16 @@ def ocr_timestamp(filename: Path, framenum: int):
     return full_timestamp
 
 
+def offset_str(arg_value: str) -> float:
+    offset_re = re.compile(r"^(\d+:)?(\d+:)?(\d+)(\.\d+)?$")
+
+    if not offset_re.match(arg_value):
+        raise argparse.ArgumentTypeError
+
+    # else
+    return hms_to_sec(arg_value)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Share to discord some of the changes ojbpm has detected",
@@ -490,6 +505,15 @@ def parse_args() -> argparse.Namespace:
         default=10,
         help="number of frames to skip between probing",
     )
+
+    parser.add_argument(
+        "--homography-search-at",
+        metavar="timestring",
+        type=offset_str,
+        default=5 * 60,  # 5 minutes
+        help="Time to start search for initial homography",
+    )
+
 
     parser.add_argument(
         "--homography-search-frames",
@@ -621,7 +645,7 @@ def main():
 
     if args.filenames[0].suffix in [".mp4", ".mkv", ".flv", "mjpeg"]:
 
-        timestamp = ocr_timestamp(args.filenames[0], 0)
+        # timestamp = ocr_timestamp(args.filenames[0], 0)
 
         matrix = find_matrix_from_video_file(
             args, args.filenames[0], detector, reference_markers)
@@ -710,6 +734,17 @@ def main():
 
             print(disposition, end="")
             sys.stdout.flush()
+
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            if disposition == "r":
+                frame = cv2.circle(frame, (800, 550), 40, (0, 0, 255), -1)
+            elif disposition == "g":
+                frame = cv2.circle(frame, (800, 550), 40, (0, 255, 0), -1)
+            elif disposition == ".":
+                frame = cv2.circle(frame, (800, 550), 40, (100, 100, 100), -1)
+
+            cv2.imshow("frame", frame)
+            cv2.waitKey(1)
 
             if output_file is not None:
                 # print(f"SAVING to {output_file}")

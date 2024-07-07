@@ -86,7 +86,7 @@ def remux_with_timecode(args: argparse.Namespace, vidfile: Path, ts: float, fps:
     timecode = sec_to_timecode(ts, fps)
     timeout = 30 * 60
 
-    fh, _tmpfile = tempfile.mkstemp(suffix=vidfile.suffix, prefix="remux_", dir=vidfile.parent)
+    fh, _tmpfile = tempfile.mkstemp(suffix=".mp4", prefix="remux_", dir=vidfile.parent)
     os.close(fh)
 
     tmpfile = Path(_tmpfile)
@@ -101,12 +101,14 @@ def remux_with_timecode(args: argparse.Namespace, vidfile: Path, ts: float, fps:
 
     if args.dry_run:
         log("DRY RUN only, remux command would have been: " + " ".join(cmd))
+        tmpfile.unlink(missing_ok=True)
         return
 
     try:
         subprocess.run(args=cmd, shell=False, stdin=subprocess.DEVNULL, check=True, timeout=timeout)
     except FileNotFoundError:
         log("ERROR: couldn't execute ffmpeg, please make sure it exists in your PATH")
+        tmpfile.unlink(missing_ok=True)
         sys.exit(1)
     except subprocess.TimeoutExpired:
         log(f"ERROR: remux-with-timecode process timed out after {timeout} seconds")
@@ -123,7 +125,11 @@ def remux_with_timecode(args: argparse.Namespace, vidfile: Path, ts: float, fps:
 
     # seems like it ran ok, rename the temp file
     # log(f"DEBUG: replacing {vidfile} with {tmpfile}")
-    tmpfile.replace(vidfile)
+    if Path(tmpfile).suffix == vidfile.suffix:
+        tmpfile.replace(vidfile)
+    else:
+        tmpfile.rename(vidfile.with_suffix(".mp4"))
+        Path(vidfile).unlink()
 
     log(f"\nDONE: completed remux-with-timecode to {vidfile}")
 
