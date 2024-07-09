@@ -19,6 +19,13 @@ from PIL import Image
 from tdvutil import hms_to_sec, ppretty, sec_to_timecode, timecode_to_sec
 from tdvutil.argparse import CheckFile, NegateAction
 
+# Do our time manipulations in Ong time -- at least, if we're not on windows.
+# FIXME: Make work on windows maybe?
+if hasattr(time, "tzset"):
+    os.environ['TZ'] = 'Australia/Sydney'
+    time.tzset()
+
+
 # from vidgear.gears import VideoGear, WriteGear
 
 # FIXME: should these be int?
@@ -76,14 +83,46 @@ def log(*args: Any):
     sys.stdout.flush()
 
 
+# FIXME: move to tdvutil
+def dt_to_timecode(dt: datetime, fps: float) -> str:
+    tc = dt.strftime("%H:%M:%S")
+    frac = dt.timestamp() % 1
+    frames = int(frac * fps)
+
+    return f"{tc}:{frames:02d}"
+
+
+def get_timecode_from_logfile(logfile: Path) -> Optional[float]:
+    with logfile.open('r') as f:
+        t = None
+        for line in f:
+            match = re.search(r' start: (\d+\.\d+),', line)
+
+            if match:
+                return float(match.group(1))
+
+    return None
+
+
+def get_fps_from_video(vidfile: Path) -> Optional[float]:
+    cap = cv2.VideoCapture(str(vidfile), cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        return None
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    cap.release()
+
+    return fps
+
+
 # FIXME: Find a way to do this without a remux. If there is one. It's vaguely
 # possible mp4box can do it (at least if there's an existing timecode chunk)
 # but I'm not smart enough to figure out how to do that. So... remux.
 #
 # FIXME: Only expected to work with integer framerates.
-def remux_with_timecode(args: argparse.Namespace, vidfile: Path, ts: float, fps: int):
-    ts = ts % (24 * 60 * 60)
-    timecode = sec_to_timecode(ts, fps)
+def remux_with_timecode(args: argparse.Namespace, vidfile: Path, timecode: str, fps: int):
+    # ts = ts % (24 * 60 * 60)
+    # timecode = sec_to_timecode(ts, fps)
     timeout = 30 * 60
 
     fh, _tmpfile = tempfile.mkstemp(suffix=".mp4", prefix="remux_", dir=vidfile.parent)
@@ -131,7 +170,7 @@ def remux_with_timecode(args: argparse.Namespace, vidfile: Path, ts: float, fps:
         tmpfile.rename(vidfile.with_suffix(".mp4"))
         Path(vidfile).unlink()
 
-    log(f"\nDONE: completed remux-with-timecode to {vidfile}")
+    log(f"\nDONE: completed remux-with-timecode to {vidfile.with_suffix('.mp4')}")
 
 
 # Our timecode string will look like: RTC 2024-06-25 12:14:45.904
@@ -297,6 +336,28 @@ def main():
         global do_trace
         do_trace = True
 
+
+    # check and see if our video file has an associated log file. If it does,
+    # search it for our starting timestamp instead of trying OCR on the video
+    logfile= args.filenames[0].with_suffix(".log")
+    if logfile.exists():
+        t = get_timecode_from_logfile(logfile)
+        if t is not None:
+            log(f"Found timestamp in logfile: {t}")
+            fps = get_fps_from_video(args.filenames[0])
+            if fps is None:
+                log("ERROR: Couldn't get FPS from video file")
+                sys.exit(1)
+
+            tc = dt_to_timecode(datetime.fromtimestamp(t), fps)
+
+            remux_with_timecode(args, args.filenames[0], tc, round(fps))
+            sys.exit(0)
+
+    # else
+    log("No logfile found, or couldn't find a first frame timestamp in log.")
+    log("Searching for timestamp in video file via OCR...")
+
     searches = [
         (5, 1),
         (40, 2),
@@ -331,7 +392,9 @@ def main():
           timestamps.frame_ts} => video starts at {starting_timestamp}")
     print(f"Video proports to be {timestamps.fps} fps (rounding to {round(timestamps.fps)})")
 
-    remux_with_timecode(args, args.filenames[0], starting_timestamp, round(timestamps.fps))
+    ts = starting_timestamp % (24 * 60 * 60)
+    timecode = sec_to_timecode(ts, timestamps.fps)
+    remux_with_timecode(args, args.filenames[0], timecode, round(timestamps.fps))
 
     sys.exit(0)
 
