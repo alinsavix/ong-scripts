@@ -5,6 +5,7 @@ import itertools
 import re
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +19,17 @@ import skimage
 from tdvutil import hms_to_sec, ppretty
 from vidgear.gears import VideoGear, WriteGear
 
-# FIXME: should these be int?
+
+@dataclass
+class Segment:
+    disposition: str
+    start_frame: int
+    end_frame: int
+
+
+Segments: TypeAlias = List[Segment]
+
+
 Point: TypeAlias = Tuple[int, int]
 
 @dataclass
@@ -174,15 +185,16 @@ def cluster(args: argparse.Namespace, frame: cv2.typing.MatLike):
 
 
 def do_frame(args: argparse.Namespace, frame: cv2.typing.MatLike,
-             detector: aruco.ArucoDetector, matrix,
+            #  detector: aruco.ArucoDetector,
+             matrix,
              mask_img: cv2.typing.MatLike, mask_roi: Tuple[Point, Point]):
 
-    markers = findAruco(args, frame, detector)
+    # markers = findAruco(args, frame, detector)
 
-    if not markers:
-        trace("No markers found.")
-        # sys.exit(1)
-        return None, None, None
+    # if not markers:
+    #     trace("No markers found.")
+    #     # sys.exit(1)
+    #     return None, None, None
 
     # try:
     #     dst_pts = flatten([ref_markers[k].as_array()
@@ -424,55 +436,145 @@ def find_matrix_from_video_file(args: argparse.Namespace, filename: Path, detect
     return None
 
 
-# RTC 2024-06-25 12:14:45.904
-re_timestamp = re.compile(r"""
-    RTC
-    \s
-    (?P<full_timestamp>
-        (?P<year>\d{4}) - (?P<month>\d{2}) - (?P<day>\d{2})
-        \s
-        (?P<hour>\d{2}) : (?P<minute>\d{2}) : (?P<second>\d{2}) \. (?P<millisecond>\d{3})
-    )
-""", re.VERBOSE)
+def statescan(args: argparse.Namespace, filename: Path, matrix):
+    # Load the reference map for the specific image area we care about
+    mask_img = skimage.io.imread("Looper Channel 1 Mask.png")
+    mask_img = cv2.cvtColor(mask_img, cv2.COLOR_RGBA2BGR)
 
-
-# modeled after https://medium.com/nanonets/a-comprehensive-guide-to-ocr-with-tesseract-opencv-and-python-fd42f69e8ca8
-def ocr_timestamp(filename: Path, framenum: int):
-    trace(f"Reading timestamp from frame {framenum}")
     cap = cv2.VideoCapture(str(filename))
+    cap.set(cv2.CAP_PROP_POS_MSEC, 1000 * args.detect_at)
 
-    if not cap.isOpened():
-        print("Can't open video file to read timestamp")
-        return None
+    framenum = -1
+    processed_frames = 0
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, framenum)
+    print("Starting state scan: ", end="")
+    sys.stdout.flush()
 
-    ret, frame = cap.read()
-    # cv2.imshow("frame", frame)
-    # cv2.waitKey(0)
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    subimage = gray[660:710, 5:805]
+    frame_statuses = []
+    segs: Segments = []
+    recent = deque(maxlen=3)
+    current = "x"
+    current_startframe = 0
 
-    # We probably don't actually *need* to do a threshold on the time text,
-    # but this will at least clean up any compression artifacting.
-    subimage = cv2.threshold(subimage, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-    # cv2.imshow("frame", thresholded)
-    # cv2.waitKey(0)
+        framenum += 1
 
-    custom_config = r'--oem 3 --psm 6'
-    ocr = pytesseract.image_to_string(subimage, config=custom_config)
+        # if framenum > 10000:
+        #     sys.exit(0)
 
-    m = re_timestamp.match(ocr)
-    if not m:
-        print(f"OCR produced invalid timestamp: {ocr}")
-        return None
+        if framenum % args.frame_stride != 0:
+            continue
 
-    print(f"OCR'd timestamp string as: {ocr}")
-    full_timestamp = datetime.strptime(m.group("full_timestamp"), "%Y-%m-%d %H:%M:%S.%f")
-    # hms_timestamp = full_timestamp.strftime("%H:%M:%S.%f")
-    # secs = hms_to_sec(hms_timestamp)
-    return full_timestamp
+        # print(f"Frame {framenum}: ", end="")
+
+        frame_offset = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        if frame_offset > args.detect_at + args.detect_length:
+            break
+
+        processed_frames += 1
+        if args.save_frame_every > 0 and (processed_frames % args.save_frame_every) == 0:
+            traceframe = True
+        else:
+            traceframe = False
+
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        roi, avgbright, dominant = do_frame(
+            args, frame, matrix, mask_img, mask1_roi)
+
+        if roi is None:
+            frame_statuses.append("x")
+            continue
+
+        output_file = None
+        disposition = None
+
+        assert avgbright is not None
+        assert dominant is not None
+        trace(f"average brightness: {avgbright}")
+        trace(f"dominant color: {dominant}")
+
+        if dominant is not None:
+            hsv = colorsys.rgb_to_hsv(
+                dominant[2] / 255, dominant[1] / 255, dominant[0] / 255)
+            trace(f"dominant color (HSV): {[float(x) for x in hsv]}")
+            # if traceframe:
+            #     print(f"avgbright: {avgbright}, dominant color (HSV): {[float(x) for x in hsv]}")
+
+        if dominant is None:
+            disposition = "!"
+            if traceframe:
+                output_file = Path(f"frames/frame{framenum:07d}_weird.jpg")
+        elif avgbright < 35:
+            disposition = "."
+            if traceframe:
+                output_file = Path(f"frames/frame{framenum:07d}_unlit.jpg")
+            # output_file = Path("frames_dark") / str(str(int(avgbright)) + "_" + file.name)
+        elif 0 < hsv[0] < (80 / 360):
+            disposition = "r"
+            if traceframe:
+                output_file = Path(f"frames/frame{framenum:07d}_red.jpg")
+            # output_file = Path("frames_red") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+        elif (100 / 360) < hsv[0] < (200 / 360):
+            disposition = "g"
+            if traceframe:
+                output_file = Path(f"frames/frame{framenum:07d}_green.jpg")
+            # output_file = Path("frames_green") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+        else:
+            disposition = "?"
+            if traceframe:
+                output_file = Path(f"frames/frame{framenum:07d}_unknown.jpg")
+            # output_file = Path("frames_unknown") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+
+        print(disposition, end="")
+        sys.stdout.flush()
+        frame_statuses.append(disposition)
+
+        if args.show_visual:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            if disposition == "r":
+                frame = cv2.circle(frame, (800, 550), 40, (0, 0, 255), -1)
+            elif disposition == "g":
+                frame = cv2.circle(frame, (800, 550), 40, (0, 255, 0), -1)
+            elif disposition == ".":
+                frame = cv2.circle(frame, (800, 550), 40, (100, 100, 100), -1)
+
+            cv2.imshow("frame", frame)
+            cv2.waitKey(1)
+
+        if output_file is not None:
+            # print(f"SAVING to {output_file}")
+            cv2.imwrite(str(output_file), cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+
+        recent.append(disposition)
+
+        # If we dont have enough yet to determine a state, continue.
+        if len(recent) < 3:
+            continue
+
+        # if the last entries aren't all the same, we're not in a stable state
+        if len(set(recent)) > 1:
+            continue
+
+        # it's stable, but it's the same as the current state, so continue
+        if recent[0] == current:
+            continue
+
+        # it's stable and different from the current state, so we have a segment.
+        # set the relevant frame numbers to mark the segment change at the
+        # start of the stable range, rather than 3 frames in
+        segs.append(Segment(current, current_startframe, framenum - 3))
+        current = recent[0]
+        current_startframe = framenum - 2
+
+    # And then at the end, end the current segment
+    segs.append(Segment(current, current_startframe, framenum))
+    # print(frame_statuses)
+    return segs
 
 
 def offset_str(arg_value: str) -> float:
@@ -500,6 +602,22 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--detect-at",
+        metavar="timestring",
+        type=offset_str,
+        default=0,
+        help="Time offset at which to start documenting looper state",
+    )
+
+    parser.add_argument(
+        "--detect-length",
+        metavar="timestring",
+        type=offset_str,
+        default=60 * 60, # 1 hour
+        help="Time offset at which to start documenting looper state",
+    )
+
+    parser.add_argument(
         "--frame-stride",
         type=int,
         default=10,
@@ -514,11 +632,10 @@ def parse_args() -> argparse.Namespace:
         help="Time to start search for initial homography",
     )
 
-
     parser.add_argument(
         "--homography-search-frames",
         type=int,
-        default=10000,
+        default=100000,
         help="number of frames search for initial homography",
     )
 
@@ -562,6 +679,13 @@ def parse_args() -> argparse.Namespace:
         default=False,
         action="store_true",
         help="show all intermediate images",
+    )
+
+    parser.add_argument(
+        "--show-visual",
+        default=False,
+        action="store_true",
+        help="show visual of state detection",
     )
 
     parser.add_argument(
@@ -613,6 +737,9 @@ def parse_args() -> argparse.Namespace:
     return parsed_args
 
 
+
+
+
 def main():
     args = parse_args()
     if args.trace:
@@ -640,26 +767,47 @@ def main():
     detector = aruco.ArucoDetector(arucoDict, arucoParam)
 
     # Load the reference map for the specific image area we care about
-    mask_img = skimage.io.imread("Looper Channel 1 Mask.png")
-    mask_img = cv2.cvtColor(mask_img, cv2.COLOR_RGBA2BGR)
+    # mask_img = skimage.io.imread("Looper Channel 1 Mask.png")
+    # mask_img = cv2.cvtColor(mask_img, cv2.COLOR_RGBA2BGR)
 
     if args.filenames[0].suffix in [".mp4", ".mkv", ".flv", "mjpeg"]:
-
-        # timestamp = ocr_timestamp(args.filenames[0], 0)
-
         matrix = find_matrix_from_video_file(
             args, args.filenames[0], detector, reference_markers)
         if matrix is None:
             print("No valid homography matrix found in video, can't continue.")
             sys.exit(1)
 
+        # We got a good matrix, start our scan
+        start_time = time.time()
+        segs = statescan(args, args.filenames[0], matrix)
+        end_time = time.time()
+        total_time = end_time - start_time
+
+        total_frames = segs[-1].end_frame
+
+        # time to actually process a single frame, since we only actually
+        # LOOK at one per stride:
+        ms_per_frame = (total_time / total_frames) * args.frame_stride * 1000
+
+        print("\nDONE")
+        print(f"\nSegments ({len(segs)} found):")
+        for seg in segs:
+            print(f"{seg.disposition}: {seg.start_frame:10d} - {seg.end_frame:10d}")
+
+        print(f"\nTotal time: {total_time:.2f} seconds ({int(ms_per_frame)}ms per frame)")
+
+        return
+
         cap = cv2.VideoCapture(str(args.filenames[0]))
-        cap.set(cv2.CAP_PROP_POS_MSEC, 1000 * 60 * 60 * 3)
+        cap.set(cv2.CAP_PROP_POS_MSEC, 1000 * args.detect_at)
+
         framenum = -1
         processed_frames = 0
 
         print("Starting state scan: ", end="")
         sys.stdout.flush()
+
+        frame_statuses = []
 
         while cap.isOpened():
             ret, frame = cap.read()
@@ -677,6 +825,8 @@ def main():
             # print(f"Frame {framenum}: ", end="")
 
             frame_offset = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+            if frame_offset > args.detect_at + args.detect_length:
+                break
 
             processed_frames += 1
             if args.save_frame_every > 0 and (processed_frames % args.save_frame_every) == 0:
@@ -686,9 +836,10 @@ def main():
 
             frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
             roi, avgbright, dominant = do_frame(
-                args, frame, detector, matrix, mask_img, mask1_roi)
+                args, frame, matrix, mask_img, mask1_roi)
 
             if roi is None:
+                frame_statuses.append("x")
                 continue
 
             output_file = None
@@ -706,34 +857,34 @@ def main():
                 # if traceframe:
                 #     print(f"avgbright: {avgbright}, dominant color (HSV): {[float(x) for x in hsv]}")
 
-            if roi is not None:
-                if dominant is None:
-                    disposition = "!"
-                    if traceframe:
-                        output_file = Path(f"frames/frame{framenum:07d}_weird.jpg")
-                elif avgbright < 35:
-                    disposition = "."
-                    if traceframe:
-                        output_file = Path(f"frames/frame{framenum:07d}_unlit.jpg")
-                    # output_file = Path("frames_dark") / str(str(int(avgbright)) + "_" + file.name)
-                elif 0 < hsv[0] < (80 / 360):
-                    disposition = "r"
-                    if traceframe:
-                        output_file = Path(f"frames/frame{framenum:07d}_red.jpg")
-                    # output_file = Path("frames_red") / str(str(int(hsv[0] * 360)) + "_" + file.name)
-                elif (100 / 360) < hsv[0] < (200 / 360):
-                    disposition = "g"
-                    if traceframe:
-                        output_file = Path(f"frames/frame{framenum:07d}_green.jpg")
-                    # output_file = Path("frames_green") / str(str(int(hsv[0] * 360)) + "_" + file.name)
-                else:
-                    disposition = "?"
-                    if traceframe:
-                        output_file = Path(f"frames/frame{framenum:07d}_unknown.jpg")
-                    # output_file = Path("frames_unknown") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+            if dominant is None:
+                disposition = "!"
+                if traceframe:
+                    output_file = Path(f"frames/frame{framenum:07d}_weird.jpg")
+            elif avgbright < 35:
+                disposition = "."
+                if traceframe:
+                    output_file = Path(f"frames/frame{framenum:07d}_unlit.jpg")
+                # output_file = Path("frames_dark") / str(str(int(avgbright)) + "_" + file.name)
+            elif 0 < hsv[0] < (80 / 360):
+                disposition = "r"
+                if traceframe:
+                    output_file = Path(f"frames/frame{framenum:07d}_red.jpg")
+                # output_file = Path("frames_red") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+            elif (100 / 360) < hsv[0] < (200 / 360):
+                disposition = "g"
+                if traceframe:
+                    output_file = Path(f"frames/frame{framenum:07d}_green.jpg")
+                # output_file = Path("frames_green") / str(str(int(hsv[0] * 360)) + "_" + file.name)
+            else:
+                disposition = "?"
+                if traceframe:
+                    output_file = Path(f"frames/frame{framenum:07d}_unknown.jpg")
+                # output_file = Path("frames_unknown") / str(str(int(hsv[0] * 360)) + "_" + file.name)
 
             print(disposition, end="")
             sys.stdout.flush()
+            frame_statuses.append(disposition)
 
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             if disposition == "r":
@@ -750,48 +901,51 @@ def main():
                 # print(f"SAVING to {output_file}")
                 cv2.imwrite(str(output_file), cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
+        print(frame_statuses)
         return
     else:
-        if args.filenames[0].is_dir():
-            args.filenames = args.filenames[0].glob("*.jpg")
+        log("ERROR: Invalid file type, must be a video file")
+        sys.exit(1)
+        # if args.filenames[0].is_dir():
+        #     args.filenames = args.filenames[0].glob("*.jpg")
 
-        for file in args.filenames:
-            print(f"{file}: ", end="")
+        # for file in args.filenames:
+        #     print(f"{file}: ", end="")
 
-            frame = skimage.io.imread(str(file))
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-            roi, avgbright, dominant = do_frame(
-                args, frame, detector, reference_markers, mask_img, mask1_roi)
+        #     frame = skimage.io.imread(str(file))
+        #     frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        #     roi, avgbright, dominant = do_frame(
+        #         args, frame, detector, reference_markers, mask_img, mask1_roi)
 
-            if roi is None:
-                continue
-            assert avgbright is not None
-            assert dominant is not None
+        #     if roi is None:
+        #         continue
+        #     assert avgbright is not None
+        #     assert dominant is not None
 
-            trace(f"average brightness: {avgbright}")
-            trace(f"dominant color: {dominant}")
+        #     trace(f"average brightness: {avgbright}")
+        #     trace(f"dominant color: {dominant}")
 
-            if dominant is not None:
-                hsv = colorsys.rgb_to_hsv(
-                    dominant[0] / 255, dominant[1] / 255, dominant[2] / 255)
-                trace(f"dominant color (HSV): {[float(x) for x in hsv]}")
+        #     if dominant is not None:
+        #         hsv = colorsys.rgb_to_hsv(
+        #             dominant[0] / 255, dominant[1] / 255, dominant[2] / 255)
+        #         trace(f"dominant color (HSV): {[float(x) for x in hsv]}")
 
-            if roi is not None:
-                if dominant is None:
-                    output_file = Path("frames_weird") / file.name
-                elif avgbright < 35:
-                    output_file = Path("frames_dark") / \
-                        str(str(int(avgbright)) + "_" + file.name)
-                elif 0 < hsv[0] < (50 / 360):
-                    output_file = Path("frames_red") / \
-                        str(str(int(hsv[0] * 360)) + "_" + file.name)
-                elif (100 / 360) < hsv[0] < (180 / 360):
-                    output_file = Path("frames_green") / \
-                        str(str(int(hsv[0] * 360)) + "_" + file.name)
-                else:
-                    output_file = Path("frames_unknown") / \
-                        str(str(int(hsv[0] * 360)) + "_" + file.name)
-                cv2.imwrite(str(output_file), roi)
+        #     if roi is not None:
+        #         if dominant is None:
+        #             output_file = Path("frames_weird") / file.name
+        #         elif avgbright < 35:
+        #             output_file = Path("frames_dark") / \
+        #                 str(str(int(avgbright)) + "_" + file.name)
+        #         elif 0 < hsv[0] < (50 / 360):
+        #             output_file = Path("frames_red") / \
+        #                 str(str(int(hsv[0] * 360)) + "_" + file.name)
+        #         elif (100 / 360) < hsv[0] < (180 / 360):
+        #             output_file = Path("frames_green") / \
+        #                 str(str(int(hsv[0] * 360)) + "_" + file.name)
+        #         else:
+        #             output_file = Path("frames_unknown") / \
+        #                 str(str(int(hsv[0] * 360)) + "_" + file.name)
+        #         cv2.imwrite(str(output_file), roi)
 
 
 if __name__ == "__main__":
