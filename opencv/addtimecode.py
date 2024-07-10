@@ -393,7 +393,7 @@ def main():
     print(f"Video proports to be {timestamps.fps} fps (rounding to {round(timestamps.fps)})")
 
     ts = starting_timestamp % (24 * 60 * 60)
-    timecode = sec_to_timecode(ts, timestamps.fps)
+    timecode = sec_to_timecode(ts, round(timestamps.fps))
     remux_with_timecode(args, args.filenames[0], timecode, round(timestamps.fps))
 
     sys.exit(0)
