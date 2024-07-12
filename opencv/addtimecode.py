@@ -1,6 +1,7 @@
 #!python3
 import argparse
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -18,6 +19,17 @@ from PIL import Image
 # import skimage
 from tdvutil import hms_to_sec, ppretty, sec_to_timecode, timecode_to_sec
 from tdvutil.argparse import CheckFile, NegateAction
+
+# ! WARNING: The time handling in this code is *very* fucky-wucky.
+# Really, we should do better, because it's *bad*. The problem is that we
+# always want our video timestamps and timecode to represent local time
+# where the recording was taken, but a lot of the various time conversion
+# routines assume UTC. So a lot of the time manipulations, we do manually,
+# just so we get the right timestmaps on the other side.
+#
+# Really do need to figure out a better way to deal with it, because did
+# I mention that the code here suuuuuucks?
+
 
 # Do our time manipulations in Ong time -- at least, if we're not on windows.
 # FIXME: Make work on windows maybe?
@@ -91,6 +103,10 @@ def dt_to_timecode(dt: datetime, fps: float) -> str:
 
     return f"{tc}:{frames:02d}"
 
+def dt_to_secs(dt: datetime) -> float:
+    tc = dt.strftime("%H:%M:%S.%f")
+    return hms_to_sec(tc)
+
 
 def get_timecode_from_logfile(logfile: Path) -> Optional[float]:
     with logfile.open('r') as f:
@@ -120,23 +136,49 @@ def get_fps_from_video(vidfile: Path) -> Optional[float]:
 # but I'm not smart enough to figure out how to do that. So... remux.
 #
 # FIXME: Only expected to work with integer framerates.
-def remux_with_timecode(args: argparse.Namespace, vidfile: Path, timecode: str, fps: int):
+def remux_with_timecode(args: argparse.Namespace, vidfile: Path, t: float, fps: int, burn_in: bool = False):
     # ts = ts % (24 * 60 * 60)
     # timecode = sec_to_timecode(ts, fps)
+    timecode = dt_to_timecode(datetime.fromtimestamp(t), fps)
+    secs = dt_to_secs(datetime.fromtimestamp(t))
+    log(f"INFO: using time {secs} -> {timecode}")
+
     timeout = 30 * 60
 
     fh, _tmpfile = tempfile.mkstemp(suffix=".mp4", prefix="remux_", dir=vidfile.parent)
     os.close(fh)
-
     tmpfile = Path(_tmpfile)
+
     # log(f"remuxing w/ timecode using tmpfile {tmpfile}")
     log(f"REMUXING '{vidfile.name}' to add timecode metadata of '{timecode}'")
 
-    cmd = [
-        "ffmpeg", "-hide_banner",
-        "-i", str(vidfile), "-map", "0", "-map", "-0:d", "-c", "copy",
-        "-timecode", timecode, "-video_track_timescale", "30000",
-        "-y", str(tmpfile)]
+    if platform.system() == "Windows":
+        encoder = ["-c:v", "h264_nvenc", "-preset", "p5"]
+    elif platform.system() == "Darwin":
+        encoder = ["-c:v", "h264_videotoolbox", "-coder", "cabac"]
+    else:
+        encoder = ["-c:v", "libx264", "-preset", "medium"]
+
+    drawtext_conf = "font=mono:fontsize=48:y=h-text_h-15:box=1:boxcolor=black:boxborderw=10|300:fontcolor=white:expansion=normal"
+
+    if not burn_in:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-hwaccel", "auto",
+            "-i", str(vidfile), "-map", "0", "-map", "-0:d", "-c", "copy",
+            "-timecode", timecode, "-video_track_timescale", "30000",
+            "-y", str(tmpfile)
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-stats_period", "10", "-hwaccel", "auto",
+            "-i", str(vidfile), "-map", "0", "-map", "-0:d",
+            # "-vf", f"drawtext=x=15:text='RTC %{{localtime\\:%Y-%m-%d %T.%3N}}':{drawtext_conf},drawtext=x=w-text_w-15:text='%{{n}}':{drawtext_conf}",
+            "-vf", f"drawtext=x=15:text='RTC %{{pts\\:hms\\:{secs}}}':{drawtext_conf}",
+            "-r", str(fps), "-fps_mode", "cfr",
+            *encoder, "-b:v", "1000k",
+            "-timecode", timecode, "-video_track_timescale", "30000",
+            "-y", str(tmpfile)
+        ]
 
     if args.dry_run:
         log("DRY RUN only, remux command would have been: " + " ".join(cmd))
@@ -235,8 +277,9 @@ def ocr_frame(frame: cv2.typing.MatLike) -> Optional[float]:
         return None
 
     # print(f"OCR'd timestamp string as: {ocr}")
-    # full_timestamp = datetime.strptime(m.group("full_timestamp"), "%Y-%m-%d %H:%M:%S.%f")
-    return hms_to_sec(m.group("time_only"))
+    full_timestamp = datetime.strptime(m.group("full_timestamp"), "%Y-%m-%d %H:%M:%S.%f")
+    return full_timestamp.timestamp()
+    # return hms_to_sec(m.group("time_only"))
 
 
 @dataclass
@@ -311,6 +354,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--burn-in",
+        default=False,
+        action="store_true",
+        help="burn in timecode to video",
+    )
+
+    parser.add_argument(
         "--trace",
         default=False,
         action="store_true",
@@ -349,9 +399,8 @@ def main():
                 log("ERROR: Couldn't get FPS from video file")
                 sys.exit(1)
 
-            tc = dt_to_timecode(datetime.fromtimestamp(t), fps)
-
-            remux_with_timecode(args, args.filenames[0], tc, round(fps))
+            t = t % (24 * 60 * 60)
+            remux_with_timecode(args, args.filenames[0], t, round(fps), args.burn_in)
             sys.exit(0)
 
     # else
@@ -394,7 +443,8 @@ def main():
 
     ts = starting_timestamp % (24 * 60 * 60)
     timecode = sec_to_timecode(ts, round(timestamps.fps))
-    remux_with_timecode(args, args.filenames[0], timecode, round(timestamps.fps))
+    # remux_with_timecode(args, args.filenames[0], timecode, round(timestamps.fps))
+    remux_with_timecode(args, args.filenames[0], ts, round(timestamps.fps), args.burn_in)
 
     sys.exit(0)
 
