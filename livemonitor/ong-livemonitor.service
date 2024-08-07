@@ -1,0 +1,15 @@
+[Unit]
+Description=Ong stream liveness monitor
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/ong
+
+ExecStart=/root/ong-scripts/livemonitor/livemonitor.py --host ${OBS_HOST} --port ${OBS_PORT}
+
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

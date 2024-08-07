@@ -1,0 +1,10 @@
+# Target that will be brought online when Jon goes live
+[Unit]
+Description=JonathanOng twitch stream online
+AllowIsolate=no
+
+# these could technicallyjust be network-online.target
+Requires=multi-user.target
+After=multi-user.target
+
+Conflicts=ong-offline.target
