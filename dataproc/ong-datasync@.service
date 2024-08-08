@@ -1,0 +1,22 @@
+# FIXME: Maybe should do this with a timer unit instead?
+[Unit]
+Description=ong data synchronization
+After=network-offline.target
+After=tailscaled.service
+
+PartOf=ong-offline.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+
+EnvironmentFile=-/etc/default/ong-datasync
+EnvironmentFile=/etc/default/ong-datasync@%i
+
+ExecStart=/root/ong-scripts/dataproc/datasync.sh ${SRCDIR} ${DESTHOST} ${DESTDIR} ${THROTTLE}
+
+Restart=on-failure
+RestartSec=60s
+
+[Install]
+WantedBy=ong-offline.target
