@@ -8,6 +8,7 @@
 import argparse
 import atexit
 import logging
+import signal
 import subprocess
 import sys
 import time
@@ -18,7 +19,7 @@ import obsws_python as obs
 import toml
 from discord_webhook import DiscordWebhook
 from obsws_python.error import OBSSDKRequestError
-from tdvutil import ppretty
+from tdvutil import ppretty, sec_to_shortstr
 from tdvutil.argparse import CheckFile
 
 state: Literal["WAITING", "STREAMING", "COOLDOWN"] = "WAITING"
@@ -51,23 +52,69 @@ subproc = None
 def run_ffmpeg(args: argparse.Namespace):
     global subproc
 
+
+    now = int(time.time())
+    datestr = time.strftime("%Y-%m-%d %Hh%Mm%Ss", time.localtime(now))
+
     drawtext_conf = "font=mono:fontsize=48:y=h-text_h-15:box=1:boxcolor=black:boxborderw=10:fontcolor=white:expansion=normal"
 
     ffmpeg_cmd = [
-        "ffmpeg", "-hide_banner", "-stats_period", "60",
-        "-f", "v4l2", "-framerate", str(args.stream_fps), "-video_size", args.stream_res,
+        "ffmpeg", "-hide_banner",  # "-loglevel", "error",
+        "-stats", "-stats_period", "60", "-hwaccel", "auto",
+
+        # Needed to get the actual timestamp of the first frame in the logs.
+        # Unfortunately, not in the video, and our drawtext filter won't use
+        # this value, but we can replace/overwrite it later.
+        "-use_wallclock_as_timestamps", "1",
+
+        # mjpeg is required to get more than like 7.5fps from this (USB2),
+        # so we use it. The camera actually embeds a h264 stream in the mjpeg
+        # stream, which would be great to use, but ffmpeg doesn't seem to
+        # support actually extracting it.
+        "-f", "v4l2", "-input_format", "mjpeg",
+        "-framerate", str(args.stream_fps), "-video_size", args.stream_res,
         "-i", args.camera_device,
-        "-vf", f"drawtext=x=15:text='RTC %{{localtime\\:%Y-%m-%d %T.%3N}}':{drawtext_conf},drawtext=x=w-text_w-15:text='%{{n}}':{drawtext_conf}",
-        "-c:v", "h264_nvenc", "-preset", "p5", "-r", str(args.stream_fps),
+        "-r", str(args.stream_fps), "-fps_mode", "cfr",
+
+        # Burn in an approximate timestamp. Note that this timestamp won't be
+        # very precise, because it's the timestamp of the time a frame is
+        # processed (which doesn't quite happen in realtime) rather than when
+        # the frame is received.
+        #
+        # Sending the output to [v0out] as a separate stream lets us have a
+        # separate stream to record, and still be able to copy the original
+        # stream to the loopback video device we want to use.
+        "-filter_complex", f"drawtext=x=15:text='RTC %{{localtime\\:%Y-%m-%d %T.%3N}}':{drawtext_conf}[v0out]",
+
+        # FIXME: See if there are better settings for our specific use case,
+        # which is an atypical one.
+        "-c:v", "h264_nvenc", "-preset", "p5", "-pix_fmt", "yuv420p",
         "-b:v", "0", "-maxrate", args.stream_bitrate, "-bufsize", "2000k",
-        "-g", str(args.stream_fps * 2), "-pix_fmt", "yuv420p",
-        "-an", "-f", "flv", args.stream_url,
+
+        # Keep a relatively small GOP to preserve seekability
+        "-g", str(args.stream_fps * 2),
+
+        # This is the main stream (the one with burned in timestamp)
+        "-map", "[v0out]", f"/ong/looper/looper-{datestr}.flv",
     ]
+
+    if args.mirror_device is not None:
+        # Also copy the original stream to a v4l2 loopback device, so that we
+        # can get at it with e.g. ustreamer or other things that need access
+        # to the same video stream.
+        ffmpeg_cmd += ["-c:v", "copy", "-f", "v4l2", "-map", "0:v", "-y", args.mirror_device]
+
+        # f"/ong/looper/looper-{datestr}.mp4|[f=flv:onfail=ignore:fifo_options=attempt_recovery=1\\\\:recover_any_error=1\\\\:drop_pkts_on_overflow=1\\\\:fifo_format=flv]{args.stream_url}"
+        # "-f", "flv", args.stream_url,
+
     # ffmpeg_cmd = ["py", "./sleep.py"]
 
     try:
-        log("INFO: ffmpeg startup, output logged to /tmp/looperstream.log")
-        with open('/tmp/looperstream.log', "a") as logfile:
+        logpath = f"/ong/looper/looper-{datestr}.log"
+        log(f"INFO: ffmpeg startup, output logged to {logpath}")
+        with open(logpath, "a") as logfile:
+            print(f"COMMAND: {' '.join(ffmpeg_cmd)}", file=logfile)
+
             # with open('d:/temp/looperstream.log', "a") as logfile:
             subproc = subprocess.Popen(
                 ffmpeg_cmd, shell=False,
@@ -100,7 +147,7 @@ def kill_ffmpeg():
     if subproc.poll() is None:
         log("INFO: asking ffmpeg to exit")
         subproc.terminate()
-        subproc.wait(5)
+        subproc.wait(15)
 
     if subproc.poll() is None:
         log("INFO: outright demanding ffmpeg to exit")
@@ -175,15 +222,17 @@ def connect_obs(host: str, port: int) -> obs.ReqClient:
     # the logic here sucks
     try:
         client = obs.ReqClient(host=host, port=port, timeout=5)
-        return client
     except OBSSDKRequestError as e:
         code = e.code
-    except (ConnectionRefusedError, OSError):
+    except (OSError):
         # log("ERROR: Connection Refused")
         return None
     except Exception as e:
         log(f"ERROR: couldn't connect to OBS: {e}")
         return None
+    else:
+        return client
+
 
     if code != 207:
         log(f"WARNING: Unknown OBS response code {code}")
@@ -230,13 +279,13 @@ def get_obs_uptime(host: Optional[str], port: int) -> Optional[int]:
     try:
         r = client.get_stream_status()
         uptime = int(r.output_duration) // 1000
-
+    except Exception:
+        return None
+    else:
         if uptime == 0:
             return None
 
         return uptime
-    except Exception:
-        return None
 
 
 def play_source(args: argparse.Namespace, scene: str, source: str) -> None:
@@ -250,13 +299,20 @@ def play_source(args: argparse.Namespace, scene: str, source: str) -> None:
 
     try:
         r = client.get_scene_item_id(scene, source)
-        id = r.scene_item_id
+        sceneid = r.scene_item_id
 
-        client.set_scene_item_enabled(scene, id, True)
+        client.set_scene_item_enabled(scene, sceneid, True)
         time.sleep(5)
-        client.set_scene_item_enabled(scene, id, False)
+        client.set_scene_item_enabled(scene, sceneid, False)
     except Exception as e:
         log(f"ERROR: couldn't play timecode source: {e}")
+
+
+should_terminate = False
+def handle_signal(signum, _frame):
+    global should_terminate
+    should_terminate = True
+    log(f"INFO: caught signal {signum}, flagging for shutdown")
 
 
 def parse_args() -> argparse.Namespace:
@@ -296,11 +352,12 @@ def parse_args() -> argparse.Namespace:
         help="which camera to stream from"
     )
 
+    # FIXME: Make optional
     parser.add_argument(
-        "--stream-url",
-        type=str,
-        help="host to which to stream audio",
-        required=True,
+        "--mirror-device",
+        type=Path,
+        default="/dev/video77",
+        help="v4l2 loopback device to copy stream to"
     )
 
     parser.add_argument(
@@ -340,13 +397,6 @@ def parse_args() -> argparse.Namespace:
         help="script to execute to configure camera after it has been opened"
     )
 
-    parser.add_argument(
-        "--force",
-        default=False,
-        action="store_true",
-        help="force streaming even if OBS is not streaming"
-    )
-
     return parser.parse_args()
 
 
@@ -361,66 +411,64 @@ def main():
     else:
         webhook_url = None
 
+    if not args.mirror_device.exists() or not args.mirror_device.is_char_device():
+        log(f"ERROR: mirror device {args.mirror_device} does not exist or is not a character device")
+        sys.exit(1)
+
+    signal.signal(signal.SIGTERM, handle_signal)
     atexit.register(kill_ffmpeg)
 
-    log("INFO: in startup, waiting for OBS to start streaming")
-    cooldown_start = 0.0
+    # Unconditionally start ffmpeg, then handle post-start things.
+    # FIXME: handle ffmpeg failing to run
+    run_ffmpeg(args)
+    time.sleep(15)
 
+    if not check_ffmpeg():
+        log("ERROR: ffmpeg failed to start")
+        send_discord(args, webhook_url, "status",
+                     "Looper recording failed to start :(")
+        sys.exit(1)
+
+    # Looks like it at least started ok
+    send_discord(args, webhook_url, "status",
+                 "Stream online, looper recording started")
+
+    if args.camera_config_script:
+        time.sleep(10)  # this sucks
+        log("INFO: configuring camera")
+        config_camera(args.camera_config_script, args.camera_device)
+
+    if args.timecode_scene is not None:
+        time.sleep(30)  # this also sucks
+        log("INFO: flashing timecode on screen")
+        # make sure this never fails
+        # FIXME: Do better
+        try:
+            uptime = get_obs_uptime(args.host, args.port)
+            if uptime is not None and uptime > 25 and uptime < 300:
+                play_source(args, args.timecode_scene, args.timecode_source)
+        except Exception as e:
+            pass
+
+    # Now just... keep an eye on it
     while True:
         # print(state)
         time.sleep(5)
 
-        if state == "WAITING":
-            if check_streaming(args):
-                log("INFO: OBS is streaming, starting ffmpeg")
-                send_discord(args, webhook_url, "status",
-                             "Stream online, starting looper stream")
-                run_ffmpeg(args)
-                state = "STREAMING"
-                if args.camera_config_script:
-                    time.sleep(10)  # this sucks
-                    config_camera(args.camera_config_script, args.camera_device)
-                if args.timecode_scene is not None:
-                    time.sleep(30)  # this also sucks
-                    uptime = get_obs_uptime(args.host, args.port)
-                    if uptime is not None and uptime > 25 and uptime < 300:
-                        play_source(args, args.timecode_scene, args.timecode_source)
+        global should_terminate
+        if should_terminate:
+            log("INFO: shutting down ffmpeg")
+            kill_ffmpeg()
+            send_discord(args, webhook_url, "status",
+                         "Looper recording ended normally")
+            sys.exit(0)
 
-        elif state == "STREAMING":
-            if not check_ffmpeg():
-                # ffmpeg has died, sigh
-                log("WARNING: ffmpeg died when we didn't expect it, restarting")
-                send_discord(args, webhook_url, "status",
-                             "Unexpected termination of looper stream (will retry)")
-                state = "WAITING"  # will restart next check
-                continue
-
-            if not check_streaming(args):
-                log("INFO: OBS has stopped streaming, entering cooldown")
-                send_discord(args, webhook_url, "status", "Stream offline, starting cooldown")
-                cooldown_start = time.time()
-                state = "COOLDOWN"
-                continue
-
-        elif state == "COOLDOWN":
-            # Are we streaming again? If so, just go straight back into
-            # streaming
-            if check_streaming(args):
-                log("INFO: OBS is streaming again, continuing")
-                send_discord(args, webhook_url, "status",
-                             "Stream back online, continuing with looper stream")
-                state = "STREAMING"
-                continue
-
-            # Otherwise, we can be in cooldown for 5 mins before we kill ffmpeg
-            if (time.time() - cooldown_start) > (5 * 60):
-                log("INFO: OBS cooldown has expired, killing ffmpeg")
-                send_discord(args, webhook_url, "status",
-                             "Cooldown ended, terminating looper stream")
-                kill_ffmpeg()
-                state = "WAITING"
-
-            continue
+        if not check_ffmpeg():
+            # ffmpeg has died, sigh
+            log("WARNING: ffmpeg died when we didn't expect it")
+            send_discord(args, webhook_url, "status",
+                         "Looper recording terminated unexpectedly")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
