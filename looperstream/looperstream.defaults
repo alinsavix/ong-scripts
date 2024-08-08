@@ -6,9 +6,10 @@ OBS_TIMECODE_SOURCE=timecode
 
 # specs for the video feed
 CAMERA_DEVICE=/dev/v4l/by-id/usb-046d_0825_8B322E20-video-index0
+MIRROR_DEVICE=/dev/video77
 STREAM_FPS=5
 STREAM_RES=1280x720
 STREAM_BITRATE=600k
-STREAM_URL=rtmp://tenforward/ong/looper
+# STREAM_URL=rtmp://tenforward/ong/looper
 
 DISCORD_CREDENTIALS=/root/ong-scripts/looperstream/credentials.toml

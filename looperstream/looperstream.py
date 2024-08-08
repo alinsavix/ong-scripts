@@ -102,7 +102,7 @@ def run_ffmpeg(args: argparse.Namespace):
         # Also copy the original stream to a v4l2 loopback device, so that we
         # can get at it with e.g. ustreamer or other things that need access
         # to the same video stream.
-        ffmpeg_cmd += ["-c:v", "copy", "-f", "v4l2", "-map", "0:v", "-y", args.mirror_device]
+        ffmpeg_cmd += ["-c:v", "copy", "-f", "v4l2", "-map", "0:v", "-y", str(args.mirror_device)]
 
         # f"/ong/looper/looper-{datestr}.mp4|[f=flv:onfail=ignore:fifo_options=attempt_recovery=1\\\\:recover_any_error=1\\\\:drop_pkts_on_overflow=1\\\\:fifo_format=flv]{args.stream_url}"
         # "-f", "flv", args.stream_url,
@@ -189,9 +189,6 @@ def send_discord(args: argparse.Namespace, webhook_url: Optional[str], msg_type:
     if not hasattr(send_discord, "last_sent"):
         send_discord.last_sent = {}  # msg type -> message
 
-    if args.force or webhook_url is None:
-        return
-
     checkfile = Path(__file__).parent / "no_discord"
     if checkfile.exists():
         log(f"safe mode, not sending discord updates (to resume: rm {checkfile})")
@@ -246,9 +243,6 @@ def connect_obs(host: str, port: int) -> obs.ReqClient:
 # returns true if we're streaming
 def check_streaming(args: argparse.Namespace) -> bool:
     global client
-
-    if args.force:
-        return True
 
     if client is None:
         client = connect_obs(args.host, args.port)
