@@ -1,0 +1,22 @@
+[Unit]
+Description=ong looper realtime streamer
+After=network-online.target
+After=tailscaled.service
+
+After=looperstream.service
+PartOf=ong-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/ong
+
+# get MIRROR_DEVICE from the looperstream config
+EnvironmentFile=/etc/default/looperstream
+
+ExecStart=/usr/bin/ustreamer --device ${MIRROR_DEVICE} --host 0.0.0.0 --port 8081 --format mjpeg --resolution ${STREAM_RES} --io-method MMAP --encoder HW --last-as-blank 30 --slowdown --log-level 0 --no-log-colors
+
+Restart=always
+RestartSec=120s
+
+[Install]
+WantedBy=ong-online.target
