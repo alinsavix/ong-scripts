@@ -102,7 +102,7 @@ def watch_bpm(args: argparse.Namespace):
 def set_bpm(host: str, port: int, sources: List[str], bpm: float):
     if bpm > 200.0:
         bpm = bpm / 2.0
-    elif bpm < 50.0:
+    elif bpm < 25.0:
         bpm = 100.0
 
     with obs.ReqClient(host=host, port=port, timeout=5) as client:
