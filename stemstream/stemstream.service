@@ -1,0 +1,22 @@
+[Unit]
+Description=ong stem audio streamer
+After=network-online.target
+After=tailscaled.service
+
+PartOf=ong-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/ong
+EnvironmentFile=/etc/default/stemstream
+
+ExecStart=/root/ong-scripts/stemstream/stemstream.py --host ${OBS_HOST} --port ${OBS_PORT} --stream-host ${ICECAST_HOST} --stream-user ${ICECAST_USER} --stream-pass ${ICECAST_PASSWORD} --credentials-file ${DISCORD_CREDENTIALS}
+
+KillMode=mixed
+TimeoutStopSec=60s
+
+Restart=always
+RestartSec=150s
+
+[Install]
+WantedBy=ong-online.target
