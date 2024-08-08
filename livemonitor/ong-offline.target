@@ -8,3 +8,6 @@ Requires=multi-user.target
 After=multi-user.target
 
 Conflicts=ong-online.target
+
+[Install]
+WantedBy=multi-user.target
