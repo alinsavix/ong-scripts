@@ -26,7 +26,7 @@ import obsws_python as obs
 from obsws_python.error import OBSSDKRequestError
 from tdvutil import ppretty
 
-state: Literal["WAITING", "STREAMING", "COOLDOWN"] = "WAITING"
+state: Literal["WAITING", "STREAMING", "UNKNOWN"]
 
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
@@ -52,6 +52,7 @@ def start_target(target: str) -> bool:
 
         log(f"INFO: started systemd target {target}")
         return True
+
 
 client = None
 
@@ -83,7 +84,7 @@ def connect_obs(host: str, port: int) -> obs.ReqClient:
 
 
 # returns true if we're streaming
-def check_streaming(args: argparse.Namespace) -> bool:
+def check_streaming(args: argparse.Namespace) -> Optional[bool]:
     global client
 
     if args.force:
@@ -93,58 +94,24 @@ def check_streaming(args: argparse.Namespace) -> bool:
         client = connect_obs(args.host, args.port)
 
     if client is None:
-        return False
+        return None
 
     try:
         r = client.get_stream_status()
     except Exception as e:  # FIXME: make more granular
-        connect_obs(args.host, args.port)
-        r = client.get_stream_status()
-    return r.output_active
+        r = None
 
-
-def get_obs_uptime(host: Optional[str], port: int) -> Optional[int]:
-    global client
-
-    if host is None:
-        return None
-
-    if client is None:
-        client = connect_obs(host, port)
-
-    if client is None:
-        return None
-
-    try:
-        r = client.get_stream_status()
-        uptime = int(r.output_duration) // 1000
-
-        if uptime == 0:
+    # if we failed to get the status for whatever reason, reconnect and
+    # try again
+    if r is None:
+        try:
+            connect_obs(args.host, args.port)
+            r = client.get_stream_status()
+        except Exception as e:  # FIXME: make more granular
+            # log(f"ERROR: couldn't get OBS stream status: {e}")
             return None
-        else:
-            return uptime
-    except Exception:
-        return None
 
-
-# def play_source(args: argparse.Namespace, scene: str, source: str) -> None:
-#     global client
-
-#     if client is None:
-#         client = connect_obs(args.host, args.port)
-
-#     if client is None:
-#         return
-
-#     try:
-#         r = client.get_scene_item_id(scene, source)
-#         id = r.scene_item_id
-
-#         client.set_scene_item_enabled(scene, id, True)
-#         time.sleep(5)
-#         client.set_scene_item_enabled(scene, id, False)
-#     except Exception as e:
-#         log(f"ERROR: couldn't play timecode source: {e}")
+    return r.output_active
 
 
 def parse_args() -> argparse.Namespace:
@@ -202,20 +169,30 @@ def main():
     if args.force:
         log("WARNING: force mode is enabled, actual OBS status will be ignored")
     else:
-        log("INFO: in startup, waiting for OBS to start streaming")
+        log("INFO: in startup, initial state UNKNOWN")
 
 
-    cooldown_start = 0.0
+    state = "UNKNOWN"
+    cooldown_start = time.time()
 
-    # FIXME: we should also have an 'unknown' state, probably, and if it
-    # doesn't resolve to a proper state within a timeout, assume that we're
-    # offline, to avoid accidentally recording things when we don't intend
-    # to.
+    # State flow:
+    # If we can get an absolute "yes" or "no" from check_streaming, go directly
+    # to STREAMING or WAITING, respectively.
+    #
+    # If we don't know what's actually happening because we can't talk to OBS,
+    # sit in an unknown state for ~5 minutes, then transition to WAITING.
+    #
+    # FIXME: could probably do a good bit of code deduplication here
     while True:
         # print(state)
 
+        is_streaming = check_streaming(args)
+
         if state == "WAITING":
-            if check_streaming(args):
+            # Only check to see if we're streaming now. We don't care if
+            # is_streaming is None, because there's never any reason to
+            # transition to UNKNOWN from WAITING.
+            if is_streaming is True:
                 log("INFO: OBS is streaming, switching to ong-online.target")
 
                 # Only change state if we successfully started the target
@@ -225,28 +202,47 @@ def main():
                     log("ERROR: couldn't start ong-online.target, will retry")
 
         elif state == "STREAMING":
-            if not check_streaming(args):
-                log("INFO: OBS has stopped streaming, entering cooldown")
-                cooldown_start = time.time()
-                state = "COOLDOWN"
-                continue
-
-        elif state == "COOLDOWN":
-            # Are we streaming again? If so, just go straight back into
-            # streaming
-            if check_streaming(args):
-                log("INFO: OBS is streaming again, continuing")
-                state = "STREAMING"
-                continue
-
-            # Otherwise, we can be in cooldown for 5 mins before we kill ffmpeg
-            if (time.time() - cooldown_start) > (5 * 60):
-                log("INFO: OBS cooldown has expired, switching to ong-offline.target")
+            if is_streaming is False:
+                log("INFO: OBS has stopped streaming, switching to ong-offline.target")
+                # Only change state if we successfully started the target
                 if start_target(args.offline_start_unit):
                     state = "WAITING"
                 else:
-                    # FIXME: what should we do if the systemctl call fails?
-                    pass
+                    log("ERROR: couldn't start ong-offline.target, will retry")
+
+            elif is_streaming is None:
+                log("WARNING: OBS status unknown, entering cooldown")
+                cooldown_start = time.time()
+                state = "UNKNOWN"
+
+        elif state == "UNKNOWN":
+            # Are we streaming (again)? If so, go straight to STREAMING. Go
+            # ahead and start the target, too, because we don't know if it's
+            # actually started and it's harmless to start it twice.
+            if is_streaming is True:
+                log("INFO: UNKNOWN > STREAMING, starting ong-online.target")
+                if start_target(args.online_start_unit):
+                    state = "STREAMING"
+                else:
+                    log("ERROR: couldn't start ong-online.target, will retry")
+
+            elif is_streaming is False:
+                log("INFO: UNKNOWN > WAITING, starting ong-offline.target")
+                if start_target(args.offline_start_unit):
+                    state = "WAITING"
+                else:
+                    log("ERROR: couldn't start ong-offline.target, will retry")
+
+            # if not true or false, it's unknown still
+            else:
+                # how long have we been unknown?
+                if (time.time() - cooldown_start) > (5 * 60):
+                    log("INFO: UNKNOWN > WAITING (expired timer), switching to ong-offline.target")
+
+                    if start_target(args.offline_start_unit):
+                        state = "WAITING"
+                    else:
+                        log("ERROR: couldn't start ong-offline.target, will retry")
 
         time.sleep(5)
 
