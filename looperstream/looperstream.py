@@ -350,7 +350,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mirror-device",
         type=Path,
-        default="/dev/video77",
+        default=None,
         help="v4l2 loopback device to copy stream to"
     )
 
@@ -405,9 +405,10 @@ def main():
     else:
         webhook_url = None
 
-    if not args.mirror_device.exists() or not args.mirror_device.is_char_device():
-        log(f"ERROR: mirror device {args.mirror_device} does not exist or is not a character device")
-        sys.exit(1)
+    if args.mirror_device is not None:
+        if not args.mirror_device.exists() or not args.mirror_device.is_char_device():
+            log(f"ERROR: mirror device {args.mirror_device} does not exist or is not a character device")
+            sys.exit(1)
 
     signal.signal(signal.SIGTERM, handle_signal)
     atexit.register(kill_ffmpeg)
