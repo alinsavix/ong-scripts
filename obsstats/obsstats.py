@@ -146,11 +146,17 @@ def run(args: argparse.Namespace) -> bool:
         printmetric("websocket.messages.outgoing", ts,
                     r.web_socket_session_outgoing_messages, tags)
 
-        # Stats for each output
-        r = client.get_output_list()
-        outputs = r.outputs
+        # Stats for each output. The ideal here is that we would query the
+        # list of outputs, and then query the status of each, but a recent
+        # OBS crash showed an issue when iterating over the list of outputs,
+        # so we're going to just specify a few outputs that we care about
+        # specifically, and only query those, with the hope we don't trigger
+        # the same crash again.
+        # r = client.get_output_list()
+        # outputs = r.outputs
+        outputs = ["simple_stream", "simple_file_output", "adv_stream", "adv_file_output"]
 
-        for output_name in [x["outputName"] for x in outputs]:
+        for output_name in outputs:
             try:
                 r = client.get_output_status(output_name)
             except obs.error.OBSSDKRequestError:
