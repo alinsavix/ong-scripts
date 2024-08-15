@@ -2,6 +2,7 @@
 # Do some OBS monitoring things running under inputs.execd in telegraf
 import argparse
 import logging
+import os
 import re
 import sys
 import time
@@ -96,10 +97,31 @@ def main():
 def run(args: argparse.Namespace) -> bool:
     try:
         client = obs.ReqClient(host=args.host, port=args.port, timeout=5)
+        eventclient = obs.EventClient(host=args.host, port=args.port,
+                                      timeout=5, subs=(obs.Subs.GENERAL))
     except (ConnectionRefusedError, OBSSDKTimeoutError, WebSocketTimeoutException) as e:
         printmetric("active", now(), 0, {})
         sys.stdout.flush()
         return True
+
+    def on_exit_started(data):
+        log(f"Got OBS exit signal, disconnecting")
+
+        # the clients have 'disconnect' methods, but they don't actually work
+        # when called from an event handler. We really want to disconnect NOW,
+        # though, so we'll just null out the client objects and python will
+        # do its normal cleanup and shut down the connections. Open to better
+        # ideas on how best to handle this.
+        # client = None
+        # eventclient = None
+        # shutdown = True
+
+        # except that didn't work reliably, how about just exit, and let
+        # telegraf or whatever restart us? And we can't even just use exit()
+        # because of the way threads are implemented in obsws
+        os._exit(0)
+
+    eventclient.callback.register(on_exit_started)
 
     flush_input()
 
@@ -121,7 +143,6 @@ def run(args: argparse.Namespace) -> bool:
             log("stdin closed, exiting")
             printmetric("active", now(), 0, {})
             sys.exit(0)
-
 
         # We only want to occasionally generate metrics for things that aren't
         # active, so keep a counter of how many times we've been asked for
