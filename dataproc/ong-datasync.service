@@ -1,0 +1,17 @@
+[Unit]
+Description=ong data synchronization
+After=network-offline.target
+After=tailscaled.service
+
+PartOf=ong-offline.target
+
+[Service]
+Type=simple
+
+ExecStart=/root/ong-scripts/dataproc/datasync_all.sh
+
+Restart=on-failure
+RestartSec=600s
+
+[Install]
+WantedBy=ong-offline.target

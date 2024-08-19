@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodically try to sync stream data
+After=network-offline.target
+After=tailscaled.service
+
+PartOf=ong-offline.target
+
+[Timer]
+OnActiveSec=30minutes
+OnCalendar=*-*-* *:17:00
+
+[Install]
+WantedBy=ong-offline.target

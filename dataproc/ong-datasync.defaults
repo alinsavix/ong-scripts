@@ -1,6 +1,0 @@
-# Specify global things here, specify thing-specific things in datasync@thing
-DESTHOST=tenforward
-THROTTLE=2500   # in kB, so 2500kB = 20000kb
-
-# DESTDIR=/Twitch/JonathanOng/Loopstation
-# SRCDIR=/ong/looper

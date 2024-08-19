@@ -1,38 +1,32 @@
 #!/usr/bin/bash
-set -e -E
 DESTUSER=ongsync
-# DESTHOST=tenforward
+DESTHOST=tenforward
 # DESTDIR=/Twitch/JonathanOng/Loopstation
 SSHKEY="/root/.ssh/ongbot.key"
 # SRCDIR=/ong/looper
-# THROTTLE=2500   # in kB, so 2500kB = 20000kb
+THROTTLE=3000   # in kB, so 2500kB = 20000kb
+THROTTLE=0
 
 export PATH=/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin
 
-SRCDIR=$1
-DESTHOST=$2
-DESTDIR=$3
-THROTTLE=$4
+SRCDIR="$1"
+DESTDIR="$2"
 
-if [[ -z $SRCDIR || -z $DESTHOST || -z $DESTDIR ]]; then
-    echo "Usage: $0 <srcdir> <desthost> <destdir> [throttle]"
+if [ -z "$SRCDIR" ] || [ -z "$DESTDIR" ]; then
+    echo "Usage: $0 SRCDIR DESTDIR" >&2
     exit 1
 fi
 
-if [[ ! -d $SRCDIR ]]; then
-    echo "Source directory does not exist: $SRCDIR"
+if [ ! -d "$SRCDIR" ]; then
+    echo "'$SRCDIR' does not exist, or is not a directory" >&2
     exit 1
-fi
-
-if [[ -z $THROTTLE || $THROTTLE -lt 0 ]]; then
-    THROTTLE=2500
 fi
 
 declare -a rsync_opts
 rsync_opts=(
     # Next line is same as --archive, minus --perms
     '--recursive' '--links' '--times' '--group' '--owner'
-    '--chmod=0644'
+    '--chmod=0664'
     '--omit-dir-times'  # otherwise complains about perms for '.'
     '--partial'    # keep partially transferred files (so we can restart)
     '--append'     # add data if files have grown, rather than rewriting
@@ -78,4 +72,5 @@ rsync_opts+=(
 #    '--exclude=.??*'
 )
 
+echo "syncing ${SRCDIR} to ${DESTHOST}:${DESTDIR}"
 nocache rsync "${rsync_opts[@]}" "${SRCDIR}/" "${DESTUSER}@${DESTHOST}:${DESTDIR}/"
