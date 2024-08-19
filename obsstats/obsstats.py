@@ -105,7 +105,7 @@ def run(args: argparse.Namespace) -> bool:
         return True
 
     def on_exit_started(data):
-        log(f"Got OBS exit signal, disconnecting")
+        log("Got OBS exit signal, disconnecting")
 
         # the clients have 'disconnect' methods, but they don't actually work
         # when called from an event handler. We really want to disconnect NOW,
@@ -142,7 +142,8 @@ def run(args: argparse.Namespace) -> bool:
         if len(x) == 0 or sys.stdin.closed:
             log("stdin closed, exiting")
             printmetric("active", now(), 0, {})
-            sys.exit(0)
+            sys.stdout.flush()
+            os._exit(0)
 
         # We only want to occasionally generate metrics for things that aren't
         # active, so keep a counter of how many times we've been asked for
