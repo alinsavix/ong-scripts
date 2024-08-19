@@ -38,15 +38,21 @@ class BPMHandler(PatternMatchingEventHandler):
                 x = f.readline()
 
         if len(x) < 2:
-            print("can't read bpm data from file, skipping update")
+            print(f"can't read valid data from '{event.src_path}', skipping update")
 
-        bpm = float(x)
+        if event.src_path.endswith("current_bpm.txt"):
+            bpm = float(x)
 
-        print(f"setting BPM to {bpm}:")
-        sys.stdout.flush()
+            print(f"setting BPM to {bpm}:")
+            sys.stdout.flush()
 
-        sources = get_sources(self.args.host, self.args.port, self.args.source_prefix)
-        set_bpm(self.args.host, self.args.port, sources, bpm)
+            sources = get_sources(self.args.host, self.args.port, self.args.source_prefix)
+            set_bpm(self.args.host, self.args.port, sources, bpm)
+
+        elif event.src_path.endswith("looper_slot.txt"):
+            print(f"setting looper slot number to {x}")
+            sys.stdout.flush()
+            set_looper_slot(self.args.host, self.args.port, "Looper Slot Number", x)
 
 
 def on_input_created(data):
@@ -82,7 +88,7 @@ def watch_bpm(args: argparse.Namespace):
 
     # And now set up the filesystem watch
     path = args.watch_dir
-    event_handler = BPMHandler(args, patterns=["current_bpm.txt"])
+    event_handler = BPMHandler(args, patterns=["current_bpm.txt", "looper_slot.txt"])
 
     observer = Observer()
     observer.schedule(event_handler, path, recursive=False)
@@ -94,6 +100,17 @@ def watch_bpm(args: argparse.Namespace):
     finally:
         observer.stop()
         observer.join()
+
+
+def set_looper_slot(host: str, port: int, source: str, slot: str):
+    with obs.ReqClient(host=host, port=port, timeout=5) as client:
+        try:
+            client.set_input_settings(source, {"text": slot.rstrip()}, True)
+            print(f"{source} changed slot number to {slot}")
+        except Exception as e:
+            print(f"WARNING: Failed to set looper slot number for {source}: {e}")
+
+        sys.stdout.flush()
 
 
 # We could stay connected and have fancy reconnect logic, but bpm changes
