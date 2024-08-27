@@ -10,7 +10,7 @@ Type=simple
 EnvironmentFile=-/etc/default/ong
 EnvironmentFile=/etc/default/looperstream
 
-ExecStart=/root/ong-scripts/looperstream/looperstream.py --host ${OBS_HOST} --port ${OBS_PORT} --timecode-scene ${OBS_TIMECODE_SCENE} --timecode-source ${OBS_TIMECODE_SOURCE} --camera-device ${CAMERA_DEVICE} --mirror-device ${MIRROR_DEVICE} --stream-res ${STREAM_RES} --stream-fps ${STREAM_FPS} --stream-bitrate ${STREAM_BITRATE} --credentials-file ${DISCORD_CREDENTIALS}
+ExecStart=/root/ong-scripts/looperstream/looperstream.py --host ${OBS_HOST} --port ${OBS_PORT} --timecode-scene ${OBS_TIMECODE_SCENE} --timecode-source ${OBS_TIMECODE_SOURCE} --camera-device ${CAMERA_DEVICE} --camera-config-script ${CAMERA_CONFIG_SCRIPT} --mirror-device ${MIRROR_DEVICE} --stream-res ${STREAM_RES} --stream-fps ${STREAM_FPS} --stream-bitrate ${STREAM_BITRATE} --credentials-file ${DISCORD_CREDENTIALS}
 
 KillMode=mixed
 TimeoutStopSec=60s
