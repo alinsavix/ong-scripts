@@ -1,0 +1,5 @@
+ffmpeg-python
+tdvutil
+tesserocr
+opencv-contrib-python
+pillow
