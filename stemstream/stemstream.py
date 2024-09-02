@@ -35,16 +35,14 @@ def run_ffmpeg(args: argparse.Namespace):
     now = int(time.time())
     datestr = time.strftime("%Y-%m-%d %Hh%Mm%Ss", time.localtime(now))
 
-    userpass = f"{args.stream_user}:{args.stream_pass}"
-    icecast_url = f"icecast://{userpass}@{args.stream_host}:{args.stream_port}/ong-stems.mp3"
+    # ong-ffmpeg -loop 1 -i looper-thumbnail.jpg -re -i /tmp/test.mp3 -vn -c:a libfdk_aac -vbr 5 -cutoff 18000 -f flv rtmp://localhost/audio/stems
+
     ffmpeg_cmd = [
-        "ffmpeg", "-hide_banner", "-stats_period", "60",
+        "ong-ffmpeg", "-hide_banner", "-stats_period", "60",
         "-f", "alsa", "-channels", "6", "-sample_rate", "48000", "-c:a", "pcm_s24le", "-channel_layout", "6.0",
         "-i", "hw:CARD=UR44,DEV=0", "-af", "pan=2c|c0=c4|c1=c5",
-        "-c:a", "libmp3lame", "-q:a", "2",
-        "-f", "mp3",
-        icecast_url,
-        # f"/ong/stems/stems-{datestr}.mp3"
+        "-c:a", "libfdk_aac", "-vbr", "5", "-cutoff", "18000",
+        "-vn", "-f", "flv", args.stream_url,
     ]
     # ffmpeg_cmd = ["py", "./sleep.py"]
 
@@ -164,32 +162,9 @@ def parse_args() -> argparse.Namespace:
         description="Stream or record audio, when OBS is streaming")
 
     parser.add_argument(
-        "--stream-host",
+        "--stream-url",
         type=str,
-        default="localhost",
         help="host to which to stream audio"
-    )
-
-    parser.add_argument(
-        "--stream-port",
-        type=int,
-        default=8000,
-        help="host to which to stream audio"
-    )
-
-    # FIXME: move these to credentials file?
-    parser.add_argument(
-        "--stream-user",
-        type=str,
-        default="source",
-        help="icecast source name to use when streaming",
-    )
-
-    parser.add_argument(
-        "--stream-pass",
-        type=str,
-        default=None,
-        help="icecast password to use when streaming"
     )
 
     parser.add_argument(
@@ -241,14 +216,14 @@ def main():
             log("INFO: shutting down ffmpeg")
             kill_ffmpeg()
             send_discord(webhook_url, "status",
-                         "stem stream ended normally")
+                         "Stem stream ended normally")
             sys.exit(0)
 
         if not check_ffmpeg():
             # ffmpeg has died, sigh
             log("WARNING: ffmpeg died when we didn't expect it")
             send_discord(webhook_url, "status",
-                         "stem stream terminated unexpectedly")
+                         "Stem stream terminated unexpectedly")
             sys.exit(1)
 
 

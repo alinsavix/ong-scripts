@@ -10,7 +10,7 @@ Type=simple
 EnvironmentFile=-/etc/default/ong
 EnvironmentFile=/etc/default/stemstream
 
-ExecStart=/root/ong-scripts/stemstream/stemstream.py --stream-host ${ICECAST_HOST} --stream-user ${ICECAST_USER} --stream-pass ${ICECAST_PASSWORD} --credentials-file ${DISCORD_CREDENTIALS}
+ExecStart=/root/ong-scripts/stemstream/stemstream.py --stream-url ${STREAM_URL} --credentials-file ${DISCORD_CREDENTIALS}
 
 KillMode=mixed
 TimeoutStopSec=60s

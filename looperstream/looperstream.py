@@ -88,21 +88,28 @@ def run_ffmpeg(args: argparse.Namespace):
 
         # FIXME: See if there are better settings for our specific use case,
         # which is an atypical one.
-        "-c:v", "h264_nvenc", "-preset", "p5", "-pix_fmt", "yuv420p",
+        "-c:v", "h264_nvenc", "-preset", "p2", "-pix_fmt", "yuv420p",
         "-b:v", "0", "-maxrate", args.stream_bitrate, "-bufsize", "2000k",
 
         # Keep a relatively small GOP to preserve seekability
         "-g", str(args.stream_fps * 2),
 
         # This is the main stream (the one with burned in timestamp)
-        "-map", "[v0out]", f"/ong/looper/looper-{datestr}.flv",
+        "-map", "[v0out]", "-f", "flv",
     ]
 
-    if args.mirror_device is not None:
+    if args.stream_url is not None:
+        ffmpeg_cmd += [args.stream_url]
+    else:
+        ffmpeg_cmd += [f"/ong/looper/looper-{datestr}.flv"]
+
+
+    if args.mirror_device:
         # Also copy the original stream to a v4l2 loopback device, so that we
         # can get at it with e.g. ustreamer or other things that need access
         # to the same video stream.
-        ffmpeg_cmd += ["-c:v", "copy", "-f", "v4l2", "-map", "0:v", "-y", str(args.mirror_device)]
+        ffmpeg_cmd += ["-c:v", "copy", "-f", "v4l2",
+                       "-map", "0:v", "-y", str(args.mirror_device)]
 
         # f"/ong/looper/looper-{datestr}.mp4|[f=flv:onfail=ignore:fifo_options=attempt_recovery=1\\\\:recover_any_error=1\\\\:drop_pkts_on_overflow=1\\\\:fifo_format=flv]{args.stream_url}"
         # "-f", "flv", args.stream_url,
@@ -346,6 +353,14 @@ def parse_args() -> argparse.Namespace:
         help="which camera to stream from"
     )
 
+    parser.add_argument(
+        "--camera-config-script",
+        type=Path,
+        default=None,
+        action=CheckFile(must_exist=True),
+        help="script to execute to configure camera after it has been opened"
+    )
+
     # FIXME: Make optional
     parser.add_argument(
         "--mirror-device",
@@ -376,6 +391,12 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--stream-url",
+        type=str,
+        help="url to which to stream"
+    )
+
+    parser.add_argument(
         "--credentials-file", "-c",
         type=Path,
         default=None,
@@ -383,13 +404,7 @@ def parse_args() -> argparse.Namespace:
         help="file with discord credentials"
     )
 
-    parser.add_argument(
-        "--camera-config-script",
-        type=Path,
-        default=None,
-        action=CheckFile(must_exist=True),
-        help="script to execute to configure camera after it has been opened"
-    )
+
 
     return parser.parse_args()
 
