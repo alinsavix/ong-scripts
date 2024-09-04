@@ -104,7 +104,55 @@ def main():
             print(f"file '{logfile}' does not exist", file=sys.stderr)
             continue
 
-        highlight_times.append(parse_logfile(logfile))
+        log_highlights = parse_logfile(logfile)
+        # if log_highlights:
+        highlight_times.extend(log_highlights)
+
+    print(highlight_times)
+    # Sort the highlight times
+    highlight_times.sort()
+
+    # Prepare the data for CSV
+    csv_filename = args.index
+    fieldnames = ['timestamp', 'highlight_id', 'completed', 'video_filename']
+
+    existing_highlights = set()
+    csv_data = []
+
+    # Read existing CSV file if it exists
+    if csv_filename.exists():
+        with csv_filename.open('r', newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                existing_highlights.add(row['timestamp'])
+                csv_data.append(row)
+
+    # Generate new entries for highlights that don't exist yet
+    next_id = max([int(row['highlight_id']) for row in csv_data], default=0) + 1
+    for ht in highlight_times:
+        print(ht)
+        timestamp = ht.strftime("%Y-%m-%d %H:%M:%S.%f")
+        if timestamp not in existing_highlights:
+            csv_data.append({
+                'timestamp': timestamp,
+                'highlight_id': str(next_id),
+                'completed': 'N',
+                'video_filename': ''
+            })
+            next_id += 1
+
+    # Sort the combined data by timestamp
+    csv_data.sort(key=lambda x: x['timestamp'])
+
+
+    # Write to CSV file
+    with csv_filename.open('w', newline='') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in csv_data:
+            writer.writerow(row)
+
+    print(f"Highlight requests updated in {csv_filename}")
 
 
 if __name__ == "__main__":

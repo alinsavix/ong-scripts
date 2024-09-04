@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import platform
 import re
 import sys
 import time
@@ -12,11 +13,14 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import ffmpeg
-import tesserocr
 from PIL import Image
 from tdvutil import ppretty
 
 video_file = "clean 2024-08-30 12h32m56s.flv"
+
+if platform.system() == "Windows":
+    os.environ["TESSDATA_PREFIX"] = "C:/Program Files/Tesseract-OCR/tessdata"
+import tesserocr
 
 # ! WARNING: The time handling in this code is *very* fucky-wucky.
 # Really, we should do better, because it's *bad*. The problem is that we
@@ -197,7 +201,7 @@ def process_video(args: argparse.Namespace, video_file: Path):
     metadata = VideoMeta(filename, start_time, end_time, duration, size_bytes)
     metadata_json = json.dumps(asdict(metadata), indent=4)
 
-    metafile = video_file.with_suffix(".meta")
+    metafile = video_file.with_suffix(video_file.parent / ("video_file.name" + ".meta"))
     with metafile.open("w") as f:
         f.write(metadata_json)
 
@@ -240,6 +244,11 @@ def main():
     for filename in args.filenames:
         # print(f"Processing '{filename}'")
         process_video(args, filename)
+
+    global ocrapi
+    if ocrapi is not None:
+        ocrapi.End()
+
 
 
 if __name__ == "__main__":
