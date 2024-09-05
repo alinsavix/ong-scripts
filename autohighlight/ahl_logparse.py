@@ -41,7 +41,7 @@ def parse_logfile(logfile_path) -> List[datetime]:
 
         # Wasn't a date/time line, and we haven't seen one, so just
         # skip until we have one
-        if not prev_time:
+        if not prev_time or not current_date:
             continue
 
         # We could put this rollover checking in only where the
@@ -78,9 +78,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--index",
         type=Path,
-        default="logindex.csv",
+        default="ahlindex.csv",
         action=CheckFile(extensions={"csv"}, must_exist=True),
-        help="The ongoing index to read/update"
+        help="The ongoing autohighlightindex to read/update"
     )
 
     parser.add_argument(
@@ -97,7 +97,7 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
 
-    highlight_times = []
+    highlight_times: List[datetime] = []
 
     for logfile in args.logfiles:
         if not logfile.exists():
@@ -108,7 +108,7 @@ def main():
         # if log_highlights:
         highlight_times.extend(log_highlights)
 
-    print(highlight_times)
+    # print(highlight_times)
     # Sort the highlight times
     highlight_times.sort()
 
@@ -143,7 +143,6 @@ def main():
 
     # Sort the combined data by timestamp
     csv_data.sort(key=lambda x: x['timestamp'])
-
 
     # Write to CSV file
     with csv_filename.open('w', newline='') as csvfile:
