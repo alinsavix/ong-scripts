@@ -357,6 +357,7 @@ def process_video(args: argparse.Namespace, video_file: Path, remuxed_file: Path
     ret = remux_with_timecode(args, video_file, remuxed_file, metadata)
     if ret is True:
         print(f"Wrote remuxed video to '{remuxed_file}'")
+        metadata.filename = remuxed_file.name
         metadata_json = json.dumps(asdict(metadata), indent=4)
 
         with metadata_file.open("w") as f:
