@@ -57,7 +57,7 @@ def main():
         request_time = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f")
         start_time = datetime.strptime(metadata[filename]['start_time'], "%Y-%m-%d %H:%M:%S.%f")
 
-        time_offset = (request_time - start_time).total_seconds() - 5
+        time_offset = (request_time - start_time).total_seconds() + 5
 
         output_filename = f"highlight_{highlight_id}_{filename}"
         output_path = autohighlight_dir / output_filename
@@ -65,8 +65,10 @@ def main():
         ffmpeg_cmd = [
             "ffmpeg",
             "-ss", f"{time_offset}",
+            "-t", "60",
             "-i", str(video_path),
-            "-t", "70",
+            # "-t", "60",
+            "-shortest",
             "-c", "copy",
             "-y",
             str(output_path)
