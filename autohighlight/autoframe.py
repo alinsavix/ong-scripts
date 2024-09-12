@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # FILE = "X:/zTEMP/autohighlight_tmp/highlight_20_clean-2024-09-07 23h01m51s.mp4"
-FILE = "X:/zTEMP/autohighlight_tmp/highlight_23_clean-2024-09-07 23h01m51s.mp4"
+# FILE = "X:/zTEMP/autohighlight_tmp/highlight_23_clean-2024-09-07 23h01m51s.mp4"
 # FILE = "X:/zTEMP/autohighlight_tmp/highlight_24_clean-2024-09-07 23h01m51s.mp4"
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import cv2
 import mediapipe as mp
@@ -11,25 +15,42 @@ from mediapipe.tasks.python.vision import ObjectDetector, ObjectDetectorOptions
 from vidgear.gears import WriteGear
 
 # Load the model
-base_options = base_options.BaseOptions(model_asset_path='efficientdet_lite0.tflite')
-options = ObjectDetectorOptions(base_options=base_options, score_threshold=0.5)
+baseopts = base_options.BaseOptions(model_asset_path='efficientdet_lite0.tflite')  # delegate=mp.tasks.BaseOptions.Delegate.GPU)
+options = ObjectDetectorOptions(base_options=baseopts, score_threshold=0.5)
 detector = ObjectDetector.create_from_options(options)
 
+# Define writer with defined parameters and suitable output filename
+# Generate output filename
+input_path = Path(sys.argv[1])
+output_filename = f"cropped_video_{input_path.name}"
+output_path = input_path.parent / output_filename
+final_filename = f"cropped_{input_path.name}"
+final_path = input_path.parent / final_filename
+
+# print(f"Input path: {input_path}, output path: {output_path}, final path: {final_path}")
+print(f"PROCESSING: {input_path}")
+sys.stdout.flush()
+
+print(f"Final path: {final_path}")
+if final_path.exists():
+    print(f"Final file {final_path} already exists, exiting")
+    sys.exit(0)
+
 # Initialize video capture
-cap = cv2.VideoCapture(FILE)
+cap = cv2.VideoCapture(str(input_path))
 
 # Get video properties
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 fps = int(cap.get(cv2.CAP_PROP_FPS))
 
-output_params = {"-vcodec": "libx264", "-crf": 23, "-preset": "fast",
+output_params = {"-vcodec": "libx264", "-crf": 23, "-preset": "fast", "-pix_fmt": "yuv420p",
                     "-input_framerate": 60,
                     "-output_dimensions": (608, 1080)
                     }
 
-# Define writer with defined parameters and suitable output filename
-out = WriteGear(output='test.mp4', logging=False, **output_params)
+
+out = WriteGear(output=str(output_path), logging=False, **output_params)
 
 
 # Define the codec and create VideoWriter object
@@ -127,10 +148,10 @@ while cap.isOpened():
     cropped_frame = frame[top:top+crop_height, left:left+crop_width]
 
     # Draw smoothed center point
-    cv2.circle(cropped_frame, (smoothed_center[0] - left, smoothed_center[1]), 5, (0, 255, 0), -1)
+    # cv2.circle(cropped_frame, (smoothed_center[0] - left, smoothed_center[1]), 5, (0, 255, 0), -1)
 
     # Draw smoothed target point
-    cv2.circle(cropped_frame, (smoothed_target_point[0] - left, smoothed_target_point[1]), 5, (0, 0, 255), -1)
+    # cv2.circle(cropped_frame, (smoothed_target_point[0] - left, smoothed_target_point[1]), 5, (0, 0, 255), -1)
 
     # Write the cropped frame to the output video
     out.write(cropped_frame)
@@ -142,3 +163,35 @@ while cap.isOpened():
 cap.release()
 out.close()
 cv2.destroyAllWindows()
+
+# Combine video and audio using ffmpeg
+
+
+# input_path = sys.argv[1]
+# output_path = f"framed_{input_path}"
+
+# input_path = Path(FILE)
+# final_filename = f"cropped_{input_path.name}"
+# final_path = input_path.parent / final_filename
+
+ffmpeg_cmd = [
+    "ffmpeg",
+    "-i", str(output_path),  # Video input (output from previous processing)
+    "-i", str(input_path),   # Audio input (original file)
+    "-c:v", "copy",     # Copy video codec
+    "-c:a", "copy",      # Use AAC for audio codec
+    "-map", "0:v:0",    # Use video from first input
+    "-map", "1:a:0",    # Use audio from second input
+    # "-shortest",        # Finish encoding when the shortest input ends
+    final_path
+]
+
+try:
+    subprocess.run(ffmpeg_cmd, check=True)
+    print(f"Successfully combined video and audio into {final_path}")
+except subprocess.CalledProcessError as e:
+    print(f"Error combining video and audio: {e}")
+
+# Clean up intermediate file
+os.remove(output_path)
+# print(f"Removed intermediate file: {output_path}")

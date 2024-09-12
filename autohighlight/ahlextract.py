@@ -30,6 +30,7 @@ def find_highlights(metadata, requests):
         for filename, data in metadata.items():
             start_time = datetime.strptime(data['start_time'], "%Y-%m-%d %H:%M:%S.%f")
             end_time = datetime.strptime(data['end_time'], "%Y-%m-%d %H:%M:%S.%f")
+            # print(f"Comparing: {start_time} <= {request_time} <= {end_time}")
             if start_time <= request_time <= end_time:
                 highlights.append((filename, request['timestamp'], request['highlight_id']))
     return highlights
@@ -43,7 +44,7 @@ def main():
     requests = load_highlight_requests(index_file)
 
     print("metadata: " + str(metadata))
-    print("requests: " + str(requests))
+    print("\nrequests: " + str(requests))
     print()
     highlights = find_highlights(metadata, requests)
 
@@ -61,6 +62,10 @@ def main():
 
         output_filename = f"highlight_{highlight_id}_{filename}"
         output_path = autohighlight_dir / output_filename
+
+        if output_path.exists():
+            print(f"Highlight {highlight_id} from {filename} already exists. Skipping.")
+            continue
 
         ffmpeg_cmd = [
             "ffmpeg",
