@@ -6,6 +6,10 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# give ourselves a place to stuff our indexes
+script_dir = Path(__file__).parent.resolve()
+INDEX_DIR = script_dir / "indexes"
+INDEX_DIR.mkdir(exist_ok=True)
 
 def load_metadata(remux_dir):
     metadata = {}
@@ -37,7 +41,7 @@ def find_highlights(metadata, requests):
 
 def main():
     remux_dir = Path("x:/zTEMP/remux_tmp")
-    index_file = Path("x:/zTEMP/logs_tmp/ahlindex.csv")
+    index_file = INDEX_DIR / "ahlindex.csv"
     autohighlight_dir = Path("x:/zTEMP/autohighlight_tmp")
 
     metadata = load_metadata(remux_dir)

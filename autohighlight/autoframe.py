@@ -14,6 +14,12 @@ from mediapipe.tasks.python.core import base_options
 from mediapipe.tasks.python.vision import ObjectDetector, ObjectDetectorOptions
 from vidgear.gears import WriteGear
 
+# give ourselves a place to stuff our indexes
+script_dir = Path(__file__).parent.resolve()
+INDEX_DIR = script_dir / "indexes"
+INDEX_DIR.mkdir(exist_ok=True)
+
+
 # Load the model
 baseopts = base_options.BaseOptions(model_asset_path='efficientdet_lite0.tflite')  # delegate=mp.tasks.BaseOptions.Delegate.GPU)
 options = ObjectDetectorOptions(base_options=baseopts, score_threshold=0.5)

@@ -19,12 +19,6 @@ from PIL import Image
 from tdvutil import hms_to_sec, ppretty
 from tdvutil.argparse import CheckFile
 
-video_file = "clean 2024-08-30 12h32m56s.flv"
-
-if platform.system() == "Windows":
-    os.environ["TESSDATA_PREFIX"] = "C:/Program Files/Tesseract-OCR/tessdata"
-import tesserocr
-
 # ! WARNING: The time handling in this code is *very* fucky-wucky.
 # Really, we should do better, because it's *bad*. The problem is that we
 # always want our video timestamps and timecode to represent local time
@@ -35,6 +29,16 @@ import tesserocr
 #
 # Really do need to figure out a better way to deal with it, because did
 # I mention that the code here suuuuuucks?
+
+
+if platform.system() == "Windows":
+    os.environ["TESSDATA_PREFIX"] = "C:/Program Files/Tesseract-OCR/tessdata"
+import tesserocr
+
+# give ourselves a place to stuff our indexes
+script_dir = Path(__file__).parent.resolve()
+INDEX_DIR = script_dir / "indexes"
+INDEX_DIR.mkdir(exist_ok=True)
 
 
 @dataclass

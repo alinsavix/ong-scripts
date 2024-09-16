@@ -9,6 +9,12 @@ from typing import Dict, List, Optional, Tuple
 
 from tdvutil.argparse import CheckFile
 
+# give ourselves a place to stuff our indexes
+script_dir = Path(__file__).parent.resolve()
+INDEX_DIR = script_dir / "indexes"
+INDEX_DIR.mkdir(exist_ok=True)
+
+
 logline_re = re.compile(r"""
     ^(?P<logtime>\d{2}:\d{2}:\d{2}\.\d{3})
     \s*
@@ -78,7 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--index",
         type=Path,
-        default="ahlindex.csv",
+        default=INDEX_DIR / "ahlindex.csv",
         action=CheckFile(extensions={"csv"}, must_exist=True),
         help="The ongoing autohighlightindex to read/update"
     )
