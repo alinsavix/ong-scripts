@@ -76,11 +76,6 @@ class Task():
         frame = self.frame
         args = self.args
 
-        # # Set up our detection model
-        # baseopts = base_options.BaseOptions(model_asset_path='efficientdet_lite0.tflite')  # delegate=mp.tasks.BaseOptions.Delegate.GPU)
-        # options = ObjectDetectorOptions(base_options=baseopts, score_threshold=0.5)
-        # detector = ObjectDetector.create_from_options(detector_options)
-
         # Convert the BGR image to RGB
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
@@ -104,7 +99,7 @@ class Task():
                 # current_center = last_center if last_center else (frame.shape[1] // 2, 540)
                 # print(f"bbox_area: {bbox_area}")
             else:
-            # Calculate center point (only horizontal)
+                # Calculate center point (only horizontal)
                 center_x = bbox.origin_x + bbox.width // 2
                 center_y = 540  # Fixed vertical component
 
@@ -117,13 +112,17 @@ class Task():
                                 (0, 255, 0), 2)
                     cv2.circle(frame, current_center, 5, (0, 255, 0), -1)
         else:
-            # If no detection, use the last known center
+            # If no detection, mark it as such, we'll come back to it
             detection_success = False
             bbox_area = 0
             # current_center = last_center if last_center else (frame.shape[1] // 2, 540)
             current_center = (0, 540)
 
-        return_frame = None
+        if args.debug:
+            return_frame = frame
+        else:
+            return_frame = None
+
         return frame_num, SingleCenterpoint(detection_success, bbox_area, current_center[0]), return_frame
 
     def __str__(self):
@@ -131,7 +130,7 @@ class Task():
 
 
 def centerpoints_from_video(args: argparse.Namespace, video_file: Path) -> Dict[int, SingleCenterpoint]:
-    centerpoints: Dict[int, SingleCenterpoint] = {}
+    initial_centerpoints: Dict[int, SingleCenterpoint] = {}
 
     # Set up our detection model
 
@@ -155,58 +154,65 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path) -> Dict[
     frame_num = 0
 
     num_consumers = multiprocessing.cpu_count()
-    print(f"Starting {num_consumers} consumers")
 
+
+    # Limit our queue size so we don't completely fill memory with frames
     tasks = multiprocessing.JoinableQueue(maxsize=num_consumers * 2)
     results = multiprocessing.Queue()
 
+    log(f"Starting {num_consumers} consumers")
+
     consumers = [Consumer(tasks, results) for _ in range(num_consumers)]
     for consumer in consumers:
+        consumer.daemon = True
         consumer.start()
 
-    threaded_mode = True
-
     cap = cv2.VideoCapture(video_file)
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    try:
+        while True:
 
-        frame_num += 1
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        # if frame_num > 400:
-        #     break
+            frame_num += 1
 
-        # args, detector_options, frame_num, frame
-        # log(f"Putting task {frame_num}")
-        task = Task(args, frame_num, frame)
-        tasks.put(task)
+            # if frame_num > 400:
+            #     break
+
+            # args, detector_options, frame_num, frame
+            # log(f"Putting task {frame_num}")
+            task = Task(args, frame_num, frame)
+            tasks.put(task)
+
+            while not results.empty():
+                fn, cp, fr = results.get()
+                # log(f"Got result {fn}, {cp}")
+                initial_centerpoints[fn] = cp
+                if fr is not None:
+                    cv2.imshow('Cropped Object Detection', fr)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
+
+        # we've sent all the tasks, send them an exit command
+        for i in range(num_consumers):
+            # log(f"Putting exit task {i}")
+            tasks.put(None)
+
+        tasks.join()
 
         while not results.empty():
             fn, cp, fr = results.get()
-            # log(f"Got result {fn}, {cp}")
-            centerpoints[fn] = cp
+            # print(f"Got result {fn}, {cp}")
+            initial_centerpoints[fn] = cp
             if fr is not None:
                 cv2.imshow('Cropped Object Detection', fr)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
 
-
-    # we've sent all the tasks, send them an exit command
-    for i in range(num_consumers):
-        # log(f"Putting exit task {i}")
-        tasks.put(None)
-
-    tasks.join()
-
-    while not results.empty():
-        fn, cp, fr = results.get()
-        # print(f"Got result {fn}, {cp}")
-        centerpoints[fn] = cp
-        if fr is not None:
-            cv2.imshow('Cropped Object Detection', fr)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+    except KeyboardInterrupt:
+        for consumer in consumers:
+            consumer.terminate()
 
     # print("Done")
     # while len(pending) > 0:
@@ -214,7 +220,7 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path) -> Dict[
     #         fn, cp, fr = pending.popleft().get()
     #         centerpoints[fn] = cp
 
-    log(f"Done (frames: {len(centerpoints)})")
+    log(f"Done (frames: {len(initial_centerpoints)})")
         # # Update last_center
         # last_center = current_center
 
@@ -273,7 +279,7 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path) -> Dict[
     cap.release()
     cv2.destroyAllWindows()
 
-    return centerpoints
+    return initial_centerpoints
 
 
 def parse_args() -> argparse.Namespace:
