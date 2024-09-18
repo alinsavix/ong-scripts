@@ -26,9 +26,9 @@ def log(msg):
 
 @dataclass
 class SingleCenterpoint:
-    detection_success: bool
+    detection_success: int
     detection_area: int
-    detected_center: int
+    detection_center: int
     # smoothed_center: int
     # smoothed_target_point: int
 
@@ -42,7 +42,7 @@ class Consumer(multiprocessing.Process):
     def run(self):
         pname = self.name
 
-        baseopts = base_options.BaseOptions(model_asset_path='efficientdet_lite0.tflite')  # delegate=mp.tasks.BaseOptions.Delegate.GPU)
+        baseopts = base_options.BaseOptions(model_asset_path='efficientdet_lite2.tflite')  # delegate=mp.tasks.BaseOptions.Delegate.GPU)
         detector_options = ObjectDetectorOptions(base_options=baseopts, score_threshold=0.5)
         detector = ObjectDetector.create_from_options(detector_options)
 
@@ -85,7 +85,7 @@ class Task():
 
         # Calculate center point
         if detection_result.detections:
-            detection_success = True
+            detection_success = 1
 
             # Use only the first detection
             detection = detection_result.detections[0]
@@ -94,7 +94,7 @@ class Task():
             # Calculate the area of the bounding box
             bbox_area = bbox.width * bbox.height
             if bbox_area < 100000:
-                detection_success = False
+                detection_success = 0
                 current_center = (0, 540)
                 # current_center = last_center if last_center else (frame.shape[1] // 2, 540)
                 # print(f"bbox_area: {bbox_area}")
@@ -113,7 +113,7 @@ class Task():
                     cv2.circle(frame, current_center, 5, (0, 255, 0), -1)
         else:
             # If no detection, mark it as such, we'll come back to it
-            detection_success = False
+            detection_success = 0
             bbox_area = 0
             # current_center = last_center if last_center else (frame.shape[1] // 2, 540)
             current_center = (0, 540)
@@ -129,9 +129,16 @@ class Task():
         return f"Processing object detections on frame_num={self.frame_num}"
 
 
-def centerpoints_from_video(args: argparse.Namespace, video_file: Path) -> Dict[int, SingleCenterpoint]:
+def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file: Path) -> Dict[int, SingleCenterpoint]:
     initial_centerpoints: Dict[int, SingleCenterpoint] = {}
 
+
+    if cp_file.exists():
+        with open(cp_file, 'r') as f:
+            for line in f:
+                frame_num, detection_success, detection_area, detection_center = line.strip().split(',')
+                initial_centerpoints[int(frame_num)] = SingleCenterpoint(int(detection_success), int(detection_area), int(detection_center))
+        return initial_centerpoints
     # Set up our detection model
 
     # detector = ObjectDetector.create_from_options(detector_options)
@@ -221,6 +228,15 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path) -> Dict[
     #         centerpoints[fn] = cp
 
     log(f"Done (frames: {len(initial_centerpoints)})")
+
+
+    with open(cp_file, 'w') as f:
+        for key in sorted(initial_centerpoints.keys()):
+            cp = initial_centerpoints[key]
+            f.write(f"{key},{cp.detection_success},{cp.detection_area},{cp.detection_center}\n")
+
+
+
         # # Update last_center
         # last_center = current_center
 
@@ -312,7 +328,9 @@ def main():
             print(f"video file '{vidfile}' does not exist", file=sys.stderr)
             continue
 
-        whatever = centerpoints_from_video(args, vidfile)
+        cpfile = vidfile.parent / (vidfile.name + ".centerpoints")
+        print(cpfile)
+        whatever = centerpoints_from_video(args, vidfile, cpfile)
         # print(ppretty(whatever))
 
 

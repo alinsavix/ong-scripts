@@ -50,7 +50,7 @@ width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 fps = int(cap.get(cv2.CAP_PROP_FPS))
 
-output_params = {"-vcodec": "libx264", "-crf": 23, "-preset": "fast", "-pix_fmt": "yuv420p",
+output_params = {"-vcodec": "libx264", "-crf": 20, "-preset": "medium", "-pix_fmt": "yuv420p",
                     "-input_framerate": 60,
                     "-output_dimensions": (608, 1080)
                     }

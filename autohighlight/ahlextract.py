@@ -76,14 +76,19 @@ def main():
             "-ss", f"{time_offset}",
             "-t", "60",
             "-i", str(video_path),
-            # "-t", "60",
+            "-vsync", "vfr",
+            "-c:v", "h264_nvenc",
+            "-preset", "p3",
+            "-qp", "16",
+            "-b:v", "0",
+            "-c:a", "alac",
             "-shortest",
-            "-c", "copy",
             "-y",
             str(output_path)
         ]
 
         print(f"Extracting highlight {highlight_id} from {filename} at offset {time_offset}")
+        sys.stdout.flush()
         # print(f"Command: {' '.join(ffmpeg_cmd)}")
 
         try:
