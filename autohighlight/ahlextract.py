@@ -6,6 +6,8 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from tdvutil import sec_to_hms
+
 # give ourselves a place to stuff our indexes
 script_dir = Path(__file__).parent.resolve()
 INDEX_DIR = script_dir / "indexes"
@@ -42,6 +44,7 @@ def find_highlights(metadata, requests):
 def main():
     remux_dir = Path("x:/zTEMP/remux_tmp")
     index_file = INDEX_DIR / "ahlindex.csv"
+    output_index_file = INDEX_DIR / "output_index.csv"
     autohighlight_dir = Path("x:/zTEMP/autohighlight_tmp")
 
     metadata = load_metadata(remux_dir)
@@ -56,16 +59,20 @@ def main():
     for filename, timestamp, description in highlights:
         print(f"- {filename}: {timestamp} - {description}")
 
-
+    meta_lines = []
     for filename, timestamp, highlight_id in highlights:
         video_path = remux_dir / filename
         request_time = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f")
         start_time = datetime.strptime(metadata[filename]['start_time'], "%Y-%m-%d %H:%M:%S.%f")
+        start_date = metadata[filename]['start_time'].split(" ")[0]
 
         time_offset = (request_time - start_time).total_seconds() + 5
 
         output_filename = f"highlight_{highlight_id}_{filename}"
         output_path = autohighlight_dir / output_filename
+
+        offset_str = sec_to_hms(time_offset).split(".")[0]
+        meta_lines.append(f"{highlight_id},{start_date},{offset_str}")
 
         if output_path.exists():
             print(f"Highlight {highlight_id} from {filename} already exists. Skipping.")
@@ -99,6 +106,7 @@ def main():
             print(f"ffmpeg stderr: {e.stderr}")
 
     print("\nHighlight extraction complete.")
+    output_index_file.write_text("\n".join(meta_lines))
 
 if __name__ == "__main__":
     main()

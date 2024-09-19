@@ -32,6 +32,12 @@ class SingleCenterpoint:
     # smoothed_center: int
     # smoothed_target_point: int
 
+@dataclass
+class SmoothedCenterpoint:
+    detection_center: int
+    smoothed_center: int
+    smoothed_target_point: int
+
 
 class Consumer(multiprocessing.Process):
     def __init__(self, task_queue, result_queue):
@@ -129,16 +135,15 @@ class Task():
         return f"Processing object detections on frame_num={self.frame_num}"
 
 
-def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file: Path) -> Dict[int, SingleCenterpoint]:
+def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file: Path) -> List[SingleCenterpoint]:
     initial_centerpoints: Dict[int, SingleCenterpoint] = {}
-
 
     if cp_file.exists():
         with open(cp_file, 'r') as f:
             for line in f:
                 frame_num, detection_success, detection_area, detection_center = line.strip().split(',')
                 initial_centerpoints[int(frame_num)] = SingleCenterpoint(int(detection_success), int(detection_area), int(detection_center))
-        return initial_centerpoints
+        return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
     # Set up our detection model
 
     # detector = ObjectDetector.create_from_options(detector_options)
@@ -227,75 +232,117 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     #         fn, cp, fr = pending.popleft().get()
     #         centerpoints[fn] = cp
 
-    log(f"Done (frames: {len(initial_centerpoints)})")
+    cap.release()
+    cv2.destroyAllWindows()
 
+    log(f"Done (frames: {len(initial_centerpoints)})")
 
     with open(cp_file, 'w') as f:
         for key in sorted(initial_centerpoints.keys()):
             cp = initial_centerpoints[key]
             f.write(f"{key},{cp.detection_success},{cp.detection_area},{cp.detection_center}\n")
 
+    return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
 
 
-        # # Update last_center
-        # last_center = current_center
+def smooth_centerpoints(centerpoints: List[SingleCenterpoint]) -> List[SmoothedCenterpoint]:
+    smoothed_centerpoints = []
 
-        # # Calculate smoothed center
-        # if smoothed_center is None:
-        #     smoothed_center = current_center
-        # else:
-        #     smoothed_center = (
-        #         int(smoothed_center[0] * (1 - center_smoothing_factor) + current_center[0] * center_smoothing_factor),
-        #         int(smoothed_center[1] * (1 - center_smoothing_factor) + current_center[1] * center_smoothing_factor)
-        #     )
+    last_center = None
 
-        # # Initialize or update target point
-        # if target_point is None:
-        #     target_point = smoothed_center
-        #     smoothed_target_point = target_point
-        # else:
-        #     distance = abs(smoothed_center[0] - smoothed_target_point[0])
-        #     if distance > distance_threshold:
-        #         frame_counter += 1
-        #         if frame_counter > 30:
-        #             target_point = smoothed_center
-        #             frame_counter = 0
-        #     else:
-        #         frame_counter = 0
+    # Initialize variables for smoothing
+    center_smoothing_factor = 0.05
+    smoothed_center = None
 
-        # # Smooth the target point
-        # if smoothed_target_point is None:
-        #     smoothed_target_point = target_point
-        # else:
-        #     smoothed_target_point = (
-        #         int(smoothed_target_point[0] * (1 - target_smoothing_factor) + target_point[0] * target_smoothing_factor),
-        #         int(smoothed_target_point[1] * (1 - target_smoothing_factor) + target_point[1] * target_smoothing_factor)
-        #     )
+    # Initialize variables for target point and frame counter
+    target_point = None
+    target_smoothing_factor = 0.05
+    smoothed_target_point = None
+    distance_threshold = 50
 
-        # # Crop frame
-        # crop_width = 608
-        # crop_height = 1080
-        # left = max(0, min(smoothed_target_point[0] - crop_width // 2, frame.shape[1] - crop_width))
-        # top = 0  # Always start from the top of the frame
-        # # cropped_frame = frame[top:top+crop_height, left:left+crop_width]
+    smoothing_frame_counter = 0
+    frame_num = 0
 
-        # centerpoints.append(Centerpoint(detection_success, current_center[0], smoothed_center[0], smoothed_target_point[0]))
+    for centerpoint in centerpoints:
+        if centerpoint.detection_success:
+            current_center = centerpoint.detection_center
+        else:
+            current_center = last_center if last_center else (1920 // 2)
 
-        # # Draw a box around the cropped area
-        # if args.debug:
-        #     cv2.rectangle(frame, (left, top), (left + crop_width, top + crop_height), (255, 0, 0), 2)
+        last_center = current_center
 
-        #     cv2.circle(frame, (smoothed_center[0], smoothed_center[1]), 5, (0, 255, 0), -1)
-        #     cv2.circle(frame, (smoothed_target_point[0], smoothed_target_point[1]), 5, (0, 0, 255), -1)
+        if smoothed_center is None:
+            smoothed_center = current_center
+        else:
+            smoothed_center = int(smoothed_center * (1 - center_smoothing_factor) + current_center * center_smoothing_factor)
 
-        # cv2.imshow('Cropped Object Detection', frame)
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     break
+        # Initialize or update target point
+        if target_point is None:
+            target_point = smoothed_center
+            smoothed_target_point = target_point
+        else:
+            distance = abs(smoothed_center - smoothed_target_point)
+            if distance > distance_threshold:
+                frame_counter += 1
+                if frame_counter > 30:
+                    target_point = smoothed_center
+                    frame_counter = 0
+            else:
+                frame_counter = 0
+
+        # Smooth the target point
+        if smoothed_target_point is None:
+            smoothed_target_point = target_point
+        else:
+            smoothed_target_point = int(smoothed_target_point * (1 - target_smoothing_factor) + target_point * target_smoothing_factor)
+
+        smoothed_centerpoints.append(SmoothedCenterpoint(current_center, smoothed_center, smoothed_target_point))
+
+    return smoothed_centerpoints
+
+
+def crop_video(smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Path, output_path: Path):
+    cap = cv2.VideoCapture(str(input_path))
+
+    # Get video properties
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+
+    if width != 1920:
+        print(f"Autocropping currently supported only for 1080p videos (width was {width})")
+        return
+
+    output_params = {"-vcodec": "libx264", "-crf": 20, "-preset": "medium", "-pix_fmt": "yuv420p",
+                    "-input_framerate": 60,
+                    "-output_dimensions": (608, 1080)
+                    }
+    out = WriteGear(output=str(output_path), logging=False, **output_params)
+
+    frame_counter = -1
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame_counter += 1
+
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
+
+        # Crop frame
+        crop_width = 608
+        crop_height = 1080
+        left = max(0, min(smoothed_centerpoints[frame_counter].smoothed_target_point - crop_width // 2, frame.shape[1] - crop_width))
+        top = 0  # Always start from the top of the frame
+        cropped_frame = frame[top:top+crop_height, left:left+crop_width]
+
+        out.write(cropped_frame)
 
     cap.release()
+    out.close()
     cv2.destroyAllWindows()
-
-    return initial_centerpoints
 
 
 def parse_args() -> argparse.Namespace:
@@ -329,9 +376,42 @@ def main():
             continue
 
         cpfile = vidfile.parent / (vidfile.name + ".centerpoints")
-        print(cpfile)
-        whatever = centerpoints_from_video(args, vidfile, cpfile)
-        # print(ppretty(whatever))
+        # print(cpfile)
+        centerpoints = centerpoints_from_video(args, vidfile, cpfile)
+        # print(centerpoints)
+        smoothed = smooth_centerpoints(centerpoints)
+
+        output_filename = f"cropped_video_{vidfile.name}"
+        output_path = vidfile.parent / output_filename
+        final_filename = f"cropped_{vidfile.name}"
+        final_path = vidfile.parent / final_filename
+
+        if final_path.exists():
+            print(f"Final file {final_path} already exists, skipping")
+            continue
+
+        crop_video(smoothed, vidfile, output_path)
+
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-i", str(output_path),  # Video input (output from previous processing)
+            "-i", str(vidfile),      # Audio input (original file)
+            "-c:v", "copy",          # Copy video codec
+            "-c:a", "copy",          # Use AAC for audio codec
+            "-map", "0:v:0",         # Use video from first input
+            "-map", "1:a:0",         # Use audio from second input
+            # "-shortest",           # Finish encoding when the shortest input ends
+            final_path
+        ]
+
+        try:
+            subprocess.run(ffmpeg_cmd, check=True)
+            print(f"Successfully combined video and audio into {final_path}")
+        except subprocess.CalledProcessError as e:
+            print(f"Error combining video and audio: {e}")
+
+        # Clean up intermediate file
+        os.remove(output_path)
 
 
 if __name__ == "__main__":
