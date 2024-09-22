@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 import argparse
 import multiprocessing
 import os
@@ -136,6 +136,44 @@ class Task():
 
 
 def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file: Path) -> List[SingleCenterpoint]:
+    initial_centerpoints: Dict[int, SingleCenterpoint] = {}
+
+    if cp_file.exists():
+        with open(cp_file, 'r') as f:
+            for line in f:
+                frame_num, detection_success, detection_area, detection_center = line.strip().split(',')
+                initial_centerpoints[int(frame_num)] = SingleCenterpoint(int(detection_success), int(detection_area), int(detection_center))
+        return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
+
+    frame_num = 0
+    stride = 4
+
+    from ultralytics import YOLO
+    model = YOLO("yolov8n.pt")  # pretrained YOLOv8n model
+
+    results = model.track(video_file, show=False, stream=True, classes=[0], vid_stride=stride, tracker="bytetrack.yaml")
+
+    for result in results:
+        if len(result.boxes) > 0:
+            bbox = result.boxes[0].xywh[0]
+            cp = SingleCenterpoint(1, int(bbox[2] * bbox[3]), int(bbox[0]))
+        else:
+            cp = SingleCenterpoint(0, 0, 0)
+
+        for i in range(stride):
+            initial_centerpoints[frame_num + i] = cp
+
+        frame_num += stride
+
+    with open(cp_file, 'w') as f:
+        for key in sorted(initial_centerpoints.keys()):
+            cp = initial_centerpoints[key]
+            f.write(f"{key},{cp.detection_success},{cp.detection_area},{cp.detection_center}\n")
+
+    return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
+
+
+def centerpoints_from_video_old(args: argparse.Namespace, video_file: Path, cp_file: Path) -> List[SingleCenterpoint]:
     initial_centerpoints: Dict[int, SingleCenterpoint] = {}
 
     if cp_file.exists():
@@ -319,14 +357,13 @@ def crop_video(smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Pat
                     }
     out = WriteGear(output=str(output_path), logging=False, **output_params)
 
-    frame_counter = -1
+    frame_counter = 0
+    prev = 0
 
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-
-        frame_counter += 1
 
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
@@ -334,11 +371,22 @@ def crop_video(smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Pat
         # Crop frame
         crop_width = 608
         crop_height = 1080
-        left = max(0, min(smoothed_centerpoints[frame_counter].smoothed_target_point - crop_width // 2, frame.shape[1] - crop_width))
+        # log(f"frame {frame_counter} of {len(smoothed_centerpoints)}")
+
+        # Somewhere we have an off-by-one error where we can have more frames
+        # than we have centerpoint data, so use the previous centerpoint if
+        # that happens.
+        try:
+            left = max(0, min(smoothed_centerpoints[frame_counter].smoothed_target_point - crop_width // 2, frame.shape[1] - crop_width))
+            prev = left
+        except IndexError:
+            log(f"warning: off-by-one (no centerpoint for frame {frame_counter})")
+            left = prev
         top = 0  # Always start from the top of the frame
         cropped_frame = frame[top:top+crop_height, left:left+crop_width]
 
         out.write(cropped_frame)
+        frame_counter += 1
 
     cap.release()
     out.close()
@@ -375,11 +423,7 @@ def main():
             print(f"video file '{vidfile}' does not exist", file=sys.stderr)
             continue
 
-        cpfile = vidfile.parent / (vidfile.name + ".centerpoints")
-        # print(cpfile)
-        centerpoints = centerpoints_from_video(args, vidfile, cpfile)
-        # print(centerpoints)
-        smoothed = smooth_centerpoints(centerpoints)
+        print(f"Autocropping {vidfile}...")
 
         output_filename = f"cropped_video_{vidfile.name}"
         output_path = vidfile.parent / output_filename
@@ -390,6 +434,15 @@ def main():
             print(f"Final file {final_path} already exists, skipping")
             continue
 
+        cpfile = vidfile.parent / (vidfile.name + ".centerpoints")
+        # print(cpfile)
+        log("Generating centerpoints...")
+        centerpoints = centerpoints_from_video(args, vidfile, cpfile)
+        # print(centerpoints)
+        log("Smoothing...")
+        smoothed = smooth_centerpoints(centerpoints)
+
+        log("Cropping...")
         crop_video(smoothed, vidfile, output_path)
 
         ffmpeg_cmd = [
@@ -404,6 +457,7 @@ def main():
             final_path
         ]
 
+        log("Merging...")
         try:
             subprocess.run(ffmpeg_cmd, check=True)
             print(f"Successfully combined video and audio into {final_path}")

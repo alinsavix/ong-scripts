@@ -129,7 +129,11 @@ def ocr_frame(frame: cv2.typing.MatLike) -> Optional[str]:
     # cv2.waitKey(10000)
 
     # print(f"OCR'd timestamp string as: {ocr}")
-    full_timestamp = datetime.strptime(m.group("full_timestamp"), "%Y-%m-%d %H:%M:%S.%f")
+    try:
+        full_timestamp = datetime.strptime(m.group("full_timestamp"), "%Y-%m-%d %H:%M:%S.%f")
+    except ValueError:
+        return None
+
     full_timestamp_str = m.group("full_timestamp")
     # return full_timestamp.timestamp()
     return full_timestamp_str

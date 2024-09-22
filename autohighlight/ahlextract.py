@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from tdvutil import sec_to_hms
+from tdvutil import sec_to_hms, sec_to_shortstr
 
 # give ourselves a place to stuff our indexes
 script_dir = Path(__file__).parent.resolve()
@@ -32,6 +32,9 @@ def load_highlight_requests(index_file):
 def find_highlights(metadata, requests):
     highlights = []
     for request in requests:
+        if request["completed"] == "Y":
+            continue
+
         request_time = datetime.strptime(request['timestamp'], "%Y-%m-%d %H:%M:%S.%f")
         for filename, data in metadata.items():
             start_time = datetime.strptime(data['start_time'], "%Y-%m-%d %H:%M:%S.%f")
@@ -67,11 +70,12 @@ def main():
         start_date = metadata[filename]['start_time'].split(" ")[0]
 
         time_offset = (request_time - start_time).total_seconds() + 5
+        offset_str = sec_to_hms(time_offset).split(".")[0]
 
-        output_filename = f"highlight_{highlight_id}_{filename}"
+        output_filename = f"highlight_{highlight_id}_{start_date}_uptime_{sec_to_shortstr(time_offset)}.mp4"
         output_path = autohighlight_dir / output_filename
 
-        offset_str = sec_to_hms(time_offset).split(".")[0]
+
         meta_lines.append(f"{highlight_id},{start_date},{offset_str}")
 
         if output_path.exists():
@@ -88,7 +92,7 @@ def main():
             "-preset", "p3",
             "-qp", "16",
             "-b:v", "0",
-            "-c:a", "alac",
+            "-c:a", "libfdk_aac", "-vbr", "5", "-cutoff", "18000",
             "-shortest",
             "-y",
             str(output_path)
@@ -106,7 +110,7 @@ def main():
             print(f"ffmpeg stderr: {e.stderr}")
 
     print("\nHighlight extraction complete.")
-    output_index_file.write_text("\n".join(meta_lines))
+    # output_index_file.write_text("\n".join(meta_lines))
 
 if __name__ == "__main__":
     main()
