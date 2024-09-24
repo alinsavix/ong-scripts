@@ -141,12 +141,12 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     if cp_file.exists():
         with open(cp_file, 'r') as f:
             for line in f:
-                frame_num, detection_success, detection_area, detection_center = line.strip().split(',')
+                frame_num, detection_success, detection_area, detection_center = [int(x) for x in line.strip().split(',')]
                 initial_centerpoints[int(frame_num)] = SingleCenterpoint(int(detection_success), int(detection_area), int(detection_center))
         return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
 
     frame_num = 0
-    stride = 4
+    stride = 1
 
     from ultralytics import YOLO
     model = YOLO("yolov8n.pt")  # pretrained YOLOv8n model
@@ -283,7 +283,45 @@ def centerpoints_from_video_old(args: argparse.Namespace, video_file: Path, cp_f
     return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
 
 
+# This does the mass-spring-damper thing, courtesy of the amazing Penwywern
+# (see https://en.wikipedia.org/wiki/Mass-spring-damper_model)
+def calcnewx(oldx, oldv, center, timestep=0.0166, freq=1, damp=1):
+    accel = -2 * damp * freq * oldv - freq**2 * (oldx - center)
+    newv = oldv + accel * timestep
+    newx = oldx + newv * timestep
+
+    print(f"{center}: {oldx},{oldv} --> {newx},{newv}")
+    return newx, newv
+
+
 def smooth_centerpoints(centerpoints: List[SingleCenterpoint]) -> List[SmoothedCenterpoint]:
+    smoothed_centerpoints = []
+
+    prevx = prevv = None
+
+    for centerpoint in centerpoints:
+        if centerpoint.detection_success:
+            current_center = centerpoint.detection_center
+        else:
+            current_center = last_center if last_center else (1920 // 2)
+
+        last_center = current_center
+
+        if prevx is None or prevv is None:
+            prevx = current_center
+            prevv = 0
+
+        # last_center = current_center
+        newx, newv = calcnewx(prevx, prevv, current_center)
+
+        smoothed_centerpoints.append(SmoothedCenterpoint(current_center, int(newx), int(newx)))
+        prevx = newx
+        prevv = newv
+
+    return smoothed_centerpoints
+
+
+def smooth_centerpoints_old(centerpoints: List[SingleCenterpoint]) -> List[SmoothedCenterpoint]:
     smoothed_centerpoints = []
 
     last_center = None
@@ -377,6 +415,7 @@ def crop_video(smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Pat
         # than we have centerpoint data, so use the previous centerpoint if
         # that happens.
         try:
+            cp = smoothed_centerpoints[frame_counter].smoothed_target_point
             left = max(0, min(smoothed_centerpoints[frame_counter].smoothed_target_point - crop_width // 2, frame.shape[1] - crop_width))
             prev = left
         except IndexError:
@@ -385,6 +424,11 @@ def crop_video(smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Pat
         top = 0  # Always start from the top of the frame
         cropped_frame = frame[top:top+crop_height, left:left+crop_width]
 
+        cropped_frame = cv2.putText(cropped_frame, str(frame_counter), (100, 100),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+
+        cropped_frame = cv2.putText(cropped_frame, f"c_x: {cp}", (100, 200),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
         out.write(cropped_frame)
         frame_counter += 1
 
