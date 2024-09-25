@@ -35,8 +35,8 @@ class SingleCenterpoint:
 @dataclass
 class SmoothedCenterpoint:
     detection_center: int
-    smoothed_center: int
-    smoothed_target_point: int
+    smoothed_center_x: float
+    smoothed_center_vel: float
 
 
 class Consumer(multiprocessing.Process):
@@ -138,7 +138,7 @@ class Task():
 def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file: Path) -> List[SingleCenterpoint]:
     initial_centerpoints: Dict[int, SingleCenterpoint] = {}
 
-    if cp_file.exists():
+    if cp_file.exists() and not args.force_detection:
         with open(cp_file, 'r') as f:
             for line in f:
                 frame_num, detection_success, detection_area, detection_center = [int(x) for x in line.strip().split(',')]
@@ -294,109 +294,51 @@ def calcnewx(oldx, oldv, center, timestep=0.0166, freq=1, damp=1):
     return newx, newv
 
 
+# smooth out our framewise list of centerpoints to give us a responsive camera
+# that isn't too "jumpy".
 def smooth_centerpoints(centerpoints: List[SingleCenterpoint]) -> List[SmoothedCenterpoint]:
     smoothed_centerpoints = []
 
-    prevx = prevv = None
+    new_x = new_v = None
+    last_center = None
 
     # get a few frames into the spring so we can have a more stable beginning
-    for i in range(15):
-        cp = centerpoints[i]
+    for cp in centerpoints[:15]:
+        if cp.detection_success:
+            current_center = cp.detection_center
+        else:
+            # If this frame didn't have a detection, use the last detection.
+            # If there wasn't a last detection, use the center of the frame.
+            current_center = last_center if last_center else (1920 // 2)
+
+        last_center = current_center
+
+        if new_x is None or new_v is None:
+            new_x = current_center
+            new_v = 0
+
+        new_x, new_v = calcnewx(new_x, new_v, current_center)
+
+    # And now do it for real
+    last_center = None
+    for cp in centerpoints:
         if cp.detection_success:
             current_center = cp.detection_center
         else:
             current_center = last_center if last_center else (1920 // 2)
 
         last_center = current_center
-        if prevx is None or prevv is None:
-            prevx = current_center
-            prevv = 0
-
-        newx, newv = calcnewx(prevx, prevv, current_center)
-        prevx = newx
-        prevv = newv
 
 
-    # And now do it for real
-    for centerpoint in centerpoints:
-        if centerpoint.detection_success:
-            current_center = centerpoint.detection_center
-        else:
-            current_center = last_center if last_center else (1920 // 2)
 
-        last_center = current_center
-
-        if prevx is None or prevv is None:
-            prevx = current_center
-            prevv = 0
-
-        # last_center = current_center
-        newx, newv = calcnewx(prevx, prevv, current_center)
-
-        smoothed_centerpoints.append(SmoothedCenterpoint(current_center, int(newx), int(newx)))
-        prevx = newx
-        prevv = newv
+        # newx/newv are guaranteed to already be set because of our warmup
+        new_x, new_v = calcnewx(new_x, new_v, current_center)
+        smoothed_centerpoints.append(SmoothedCenterpoint(current_center, new_x, new_v))
 
     return smoothed_centerpoints
 
 
-def smooth_centerpoints_old(centerpoints: List[SingleCenterpoint]) -> List[SmoothedCenterpoint]:
-    smoothed_centerpoints = []
-
-    last_center = None
-
-    # Initialize variables for smoothing
-    center_smoothing_factor = 0.05
-    smoothed_center = None
-
-    # Initialize variables for target point and frame counter
-    target_point = None
-    target_smoothing_factor = 0.05
-    smoothed_target_point = None
-    distance_threshold = 50
-
-    smoothing_frame_counter = 0
-    frame_num = 0
-
-    for centerpoint in centerpoints:
-        if centerpoint.detection_success:
-            current_center = centerpoint.detection_center
-        else:
-            current_center = last_center if last_center else (1920 // 2)
-
-        last_center = current_center
-
-        if smoothed_center is None:
-            smoothed_center = current_center
-        else:
-            smoothed_center = int(smoothed_center * (1 - center_smoothing_factor) + current_center * center_smoothing_factor)
-
-        # Initialize or update target point
-        if target_point is None:
-            target_point = smoothed_center
-            smoothed_target_point = target_point
-        else:
-            distance = abs(smoothed_center - smoothed_target_point)
-            if distance > distance_threshold:
-                frame_counter += 1
-                if frame_counter > 30:
-                    target_point = smoothed_center
-                    frame_counter = 0
-            else:
-                frame_counter = 0
-
-        # Smooth the target point
-        if smoothed_target_point is None:
-            smoothed_target_point = target_point
-        else:
-            smoothed_target_point = int(smoothed_target_point * (1 - target_smoothing_factor) + target_point * target_smoothing_factor)
-
-        smoothed_centerpoints.append(SmoothedCenterpoint(current_center, smoothed_center, smoothed_target_point))
-
-    return smoothed_centerpoints
-
-
-def crop_video(smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Path, output_path: Path):
+def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Path, output_path: Path):
     cap = cv2.VideoCapture(str(input_path))
 
     # Get video properties
@@ -434,20 +376,28 @@ def crop_video(smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Pat
         # than we have centerpoint data, so use the previous centerpoint if
         # that happens.
         try:
-            cp = smoothed_centerpoints[frame_counter].smoothed_target_point
-            left = max(0, min(smoothed_centerpoints[frame_counter].smoothed_target_point - crop_width // 2, frame.shape[1] - crop_width))
+            scp = smoothed_centerpoints[frame_counter]
+            left = int(max(0, min(scp.smoothed_center_x - crop_width // 2, frame.shape[1] - crop_width)))
             prev = left
         except IndexError:
             log(f"warning: off-by-one (no centerpoint for frame {frame_counter})")
             left = prev
         top = 0  # Always start from the top of the frame
-        cropped_frame = frame[top:top+crop_height, left:left+crop_width]
+        cropped_frame = frame[top:top + crop_height, left:left + crop_width]
 
-        # cropped_frame = cv2.putText(cropped_frame, str(frame_counter), (100, 100),
-        #                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        if args.debug:
+            cropped_frame = cv2.putText(cropped_frame, f"frame {frame_counter}", (10, 100),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
 
-        # cropped_frame = cv2.putText(cropped_frame, f"c_x: {cp}", (100, 200),
-        #                             cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+            cropped_frame = cv2.putText(cropped_frame, f"c: {scp.detection_center}", (10, 135),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
+
+            cropped_frame = cv2.putText(cropped_frame, f"c_x: {scp.smoothed_center_x:0.3f}", (10, 170),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
+
+            cropped_frame = cv2.putText(cropped_frame, f"c_vel: {scp.smoothed_center_vel:0.3f}", (10, 205),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
+
         out.write(cropped_frame)
         frame_counter += 1
 
@@ -466,14 +416,31 @@ def parse_args() -> argparse.Namespace:
         metavar="VIDEOFILE",
         type=Path,
         nargs='+',
-        help="The video file(s) to process"
+        help="The video file(s) to process",
     )
 
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Diplay object detection and centerpoint info"
+        help="Diplay object detection and centerpoint info",
     )
+
+    parser.add_argument(
+        "--force-detection",
+        action="store_true",
+        help="Force (re)detection of Ong positions",
+    )
+
+    parser.add_argument(
+        "--force-crop",
+        action="store_true",
+        help="Force (re)cropping of video",
+    )
+
+    parser_results = parser.parse_args()
+
+    if parser_results.force_detection:
+        parser_results.force_crop = True
 
     return parser.parse_args()
 
@@ -493,7 +460,7 @@ def main():
         final_filename = f"cropped_{vidfile.name}"
         final_path = vidfile.parent / final_filename
 
-        if final_path.exists():
+        if final_path.exists() and not args.force_crop:
             print(f"Final file {final_path} already exists, skipping")
             continue
 
@@ -506,7 +473,7 @@ def main():
         smoothed = smooth_centerpoints(centerpoints)
 
         log("Cropping...")
-        crop_video(smoothed, vidfile, output_path)
+        crop_video(args, smoothed, vidfile, output_path)
 
         ffmpeg_cmd = [
             "ffmpeg",
@@ -517,6 +484,7 @@ def main():
             "-map", "0:v:0",         # Use video from first input
             "-map", "1:a:0",         # Use audio from second input
             # "-shortest",           # Finish encoding when the shortest input ends
+            "-y",
             final_path
         ]
 
