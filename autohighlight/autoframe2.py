@@ -48,7 +48,8 @@ class Consumer(multiprocessing.Process):
     def run(self):
         pname = self.name
 
-        baseopts = base_options.BaseOptions(model_asset_path='efficientdet_lite2.tflite')  # delegate=mp.tasks.BaseOptions.Delegate.GPU)
+        # delegate=mp.tasks.BaseOptions.Delegate.GPU)
+        baseopts = base_options.BaseOptions(model_asset_path='efficientdet_lite2.tflite')
         detector_options = ObjectDetectorOptions(base_options=baseopts, score_threshold=0.5)
         detector = ObjectDetector.create_from_options(detector_options)
 
@@ -114,8 +115,8 @@ class Task():
                 # Draw bounding box
                 if args.debug:
                     cv2.rectangle(frame, (bbox.origin_x, bbox.origin_y),
-                                (bbox.origin_x + bbox.width, bbox.origin_y + bbox.height),
-                                (0, 255, 0), 2)
+                                  (bbox.origin_x + bbox.width, bbox.origin_y + bbox.height),
+                                  (0, 255, 0), 2)
                     cv2.circle(frame, current_center, 5, (0, 255, 0), -1)
         else:
             # If no detection, mark it as such, we'll come back to it
@@ -141,8 +142,10 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     if cp_file.exists() and not args.force_detection:
         with open(cp_file, 'r') as f:
             for line in f:
-                frame_num, detection_success, detection_area, detection_center = [int(x) for x in line.strip().split(',')]
-                initial_centerpoints[int(frame_num)] = SingleCenterpoint(int(detection_success), int(detection_area), int(detection_center))
+                frame_num, detection_success, detection_area, detection_center = [
+                    int(x) for x in line.strip().split(',')]
+                initial_centerpoints[int(frame_num)] = SingleCenterpoint(
+                    int(detection_success), int(detection_area), int(detection_center))
         return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
 
     frame_num = 0
@@ -151,7 +154,8 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     from ultralytics import YOLO
     model = YOLO("yolov8n.pt")  # pretrained YOLOv8n model
 
-    results = model.track(video_file, show=False, stream=True, classes=[0], vid_stride=stride, tracker="bytetrack.yaml")
+    results = model.track(video_file, show=False, stream=True, classes=[
+                          0], vid_stride=stride, tracker="bytetrack.yaml")
 
     for result in results:
         if len(result.boxes) > 0:
@@ -180,7 +184,8 @@ def centerpoints_from_video_old(args: argparse.Namespace, video_file: Path, cp_f
         with open(cp_file, 'r') as f:
             for line in f:
                 frame_num, detection_success, detection_area, detection_center = line.strip().split(',')
-                initial_centerpoints[int(frame_num)] = SingleCenterpoint(int(detection_success), int(detection_area), int(detection_center))
+                initial_centerpoints[int(frame_num)] = SingleCenterpoint(
+                    int(detection_success), int(detection_area), int(detection_center))
         return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
     # Set up our detection model
 
@@ -329,13 +334,54 @@ def smooth_centerpoints(centerpoints: List[SingleCenterpoint]) -> List[SmoothedC
 
         last_center = current_center
 
-
-
         # newx/newv are guaranteed to already be set because of our warmup
         new_x, new_v = calcnewx(new_x, new_v, current_center)
         smoothed_centerpoints.append(SmoothedCenterpoint(current_center, new_x, new_v))
 
     return smoothed_centerpoints
+
+def crop_video_new(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Path, output_path: Path):
+    print(f"cropping {input_path} -> {output_path}")
+    frame_width=1920
+    frame_height= 1080
+
+    crop_width = 608
+    crop_height = 1080
+
+    frametime = 1/60.0
+
+    f = Path("commands.txt").open("w")
+
+    for i, scp in enumerate(smoothed_centerpoints):
+        left = int(max(0, min(scp.smoothed_center_x - crop_width // 2, frame_width - crop_width)))
+        top = 0  # Always start from the top of the frame
+
+        if i == 0:
+            f.write(f"0 crop w {crop_width}, crop h {crop_height}, crop x {left}, crop y {top};\n")
+        else:
+            f.write(
+            f"{i * frametime - 0.005} crop w {crop_width}, crop h {crop_height}, crop x {left}, crop y {top};\n")
+
+    f.close()
+
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-r", "60",
+        "-i", str(input_path),   # Original video input
+        "-filter_complex", "[0:v]sendcmd=f=commands.txt,crop",
+        "-an",
+        "-c:v", "libx264", "-crf", "20", "-preset", "medium",
+        "-pix_fmt", "yuv420p",
+        # "-shortest",           # Finish encoding when the shortest input ends
+        "-y",
+        str(output_path),
+    ]
+
+    try:
+        subprocess.run(ffmpeg_cmd, check=True)
+        print(f"Successfully cropped to {output_path}")
+    except subprocess.CalledProcessError as e:
+        print(f"Error cropping video: {e}")
 
 
 def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Path, output_path: Path):
@@ -351,9 +397,9 @@ def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCen
         return
 
     output_params = {"-vcodec": "libx264", "-crf": 20, "-preset": "medium", "-pix_fmt": "yuv420p",
-                    "-input_framerate": 60,
-                    "-output_dimensions": (608, 1080)
-                    }
+                     "-input_framerate": 60,
+                     "-output_dimensions": (608, 1080)
+                     }
     out = WriteGear(output=str(output_path), logging=False, **output_params)
 
     frame_counter = 0
@@ -377,7 +423,8 @@ def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCen
         # that happens.
         try:
             scp = smoothed_centerpoints[frame_counter]
-            left = int(max(0, min(scp.smoothed_center_x - crop_width // 2, frame.shape[1] - crop_width)))
+            left = int(max(0, min(scp.smoothed_center_x -
+                       crop_width // 2, frame.shape[1] - crop_width)))
             prev = left
         except IndexError:
             log(f"warning: off-by-one (no centerpoint for frame {frame_counter})")
@@ -387,7 +434,7 @@ def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCen
 
         if args.debug:
             cropped_frame = cv2.putText(cropped_frame, f"frame {frame_counter}", (10, 100),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
 
             cropped_frame = cv2.putText(cropped_frame, f"c: {scp.detection_center}", (10, 135),
                                         cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
