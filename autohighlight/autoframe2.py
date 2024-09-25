@@ -290,7 +290,7 @@ def calcnewx(oldx, oldv, center, timestep=0.0166, freq=1, damp=1):
     newv = oldv + accel * timestep
     newx = oldx + newv * timestep
 
-    print(f"{center}: {oldx},{oldv} --> {newx},{newv}")
+    # print(f"{center}: {oldx},{oldv} --> {newx},{newv}")
     return newx, newv
 
 
@@ -299,6 +299,25 @@ def smooth_centerpoints(centerpoints: List[SingleCenterpoint]) -> List[SmoothedC
 
     prevx = prevv = None
 
+    # get a few frames into the spring so we can have a more stable beginning
+    for i in range(15):
+        cp = centerpoints[i]
+        if cp.detection_success:
+            current_center = cp.detection_center
+        else:
+            current_center = last_center if last_center else (1920 // 2)
+
+        last_center = current_center
+        if prevx is None or prevv is None:
+            prevx = current_center
+            prevv = 0
+
+        newx, newv = calcnewx(prevx, prevv, current_center)
+        prevx = newx
+        prevv = newv
+
+
+    # And now do it for real
     for centerpoint in centerpoints:
         if centerpoint.detection_success:
             current_center = centerpoint.detection_center
@@ -424,11 +443,11 @@ def crop_video(smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Pat
         top = 0  # Always start from the top of the frame
         cropped_frame = frame[top:top+crop_height, left:left+crop_width]
 
-        cropped_frame = cv2.putText(cropped_frame, str(frame_counter), (100, 100),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        # cropped_frame = cv2.putText(cropped_frame, str(frame_counter), (100, 100),
+        #                     cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
 
-        cropped_frame = cv2.putText(cropped_frame, f"c_x: {cp}", (100, 200),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        # cropped_frame = cv2.putText(cropped_frame, f"c_x: {cp}", (100, 200),
+        #                             cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
         out.write(cropped_frame)
         frame_counter += 1
 
