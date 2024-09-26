@@ -11,11 +11,9 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import cv2
-import mediapipe as mp
 import numpy as np
-from mediapipe.tasks.python.core import base_options
-from mediapipe.tasks.python.vision import ObjectDetector, ObjectDetectorOptions
 from tdvutil import ppretty
+from ultralytics import YOLO
 from vidgear.gears import WriteGear
 
 
@@ -48,10 +46,11 @@ class Consumer(multiprocessing.Process):
     def run(self):
         pname = self.name
 
-        # delegate=mp.tasks.BaseOptions.Delegate.GPU)
-        baseopts = base_options.BaseOptions(model_asset_path='efficientdet_lite2.tflite')
-        detector_options = ObjectDetectorOptions(base_options=baseopts, score_threshold=0.5)
-        detector = ObjectDetector.create_from_options(detector_options)
+        # Set up mediapipe bits, if we're still doing that, once per
+        # worker process
+        # baseopts = base_options.BaseOptions(model_asset_path='efficientdet_lite2.tflite')
+        # detector_options = ObjectDetectorOptions(base_options=baseopts, score_threshold=0.5)
+        # detector = ObjectDetector.create_from_options(detector_options)
 
         log(f"Consumer {pname} started")
 
@@ -65,9 +64,8 @@ class Consumer(multiprocessing.Process):
 
             # log(f"Processing task: {pname}, {temp_task}")
 
-            result = temp_task.process(detector)
-            # log(f"Result from {pname}: {result}")
-
+            # result = temp_task.process(detector)
+            result = temp_task.process()
             self.result_queue.put(result)
             self.task_queue.task_done()
 
@@ -84,53 +82,14 @@ class Task():
         args = self.args
 
         # Convert the BGR image to RGB
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
+        # image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
 
         # Perform object detection
-        detection_result = detector.detect(mp_image)
+        # detection_result = detector.detect(mp_image)
 
-        # Calculate center point
-        if detection_result.detections:
-            detection_success = 1
-
-            # Use only the first detection
-            detection = detection_result.detections[0]
-            bbox = detection.bounding_box
-
-            # Calculate the area of the bounding box
-            bbox_area = bbox.width * bbox.height
-            if bbox_area < 100000:
-                detection_success = 0
-                current_center = (0, 540)
-                # current_center = last_center if last_center else (frame.shape[1] // 2, 540)
-                # print(f"bbox_area: {bbox_area}")
-            else:
-                # Calculate center point (only horizontal)
-                center_x = bbox.origin_x + bbox.width // 2
-                center_y = 540  # Fixed vertical component
-
-                current_center = (center_x, center_y)
-
-                # Draw bounding box
-                if args.debug:
-                    cv2.rectangle(frame, (bbox.origin_x, bbox.origin_y),
-                                  (bbox.origin_x + bbox.width, bbox.origin_y + bbox.height),
-                                  (0, 255, 0), 2)
-                    cv2.circle(frame, current_center, 5, (0, 255, 0), -1)
-        else:
-            # If no detection, mark it as such, we'll come back to it
-            detection_success = 0
-            bbox_area = 0
-            # current_center = last_center if last_center else (frame.shape[1] // 2, 540)
-            current_center = (0, 540)
-
-        if args.debug:
-            return_frame = frame
-        else:
-            return_frame = None
-
-        return frame_num, SingleCenterpoint(detection_success, bbox_area, current_center[0]), return_frame
+        # do some stuff, then return
+        # return frame_num, SingleCenterpoint(detection_success, bbox_area, current_center[0]), return_frame
 
     def __str__(self):
         return f"Processing object detections on frame_num={self.frame_num}"
@@ -151,7 +110,6 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     frame_num = 0
     stride = 1
 
-    from ultralytics import YOLO
     model = YOLO("yolov8n.pt")  # pretrained YOLOv8n model
 
     results = model.track(video_file, show=False, stream=True, classes=[
@@ -340,6 +298,8 @@ def smooth_centerpoints(centerpoints: List[SingleCenterpoint]) -> List[SmoothedC
 
     return smoothed_centerpoints
 
+
+# crop a video w/ ffmpeg's crop (but seems wonky?)
 def crop_video_new(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Path, output_path: Path):
     print(f"cropping {input_path} -> {output_path}")
     frame_width=1920
@@ -384,6 +344,7 @@ def crop_video_new(args: argparse.Namespace, smoothed_centerpoints: List[Smoothe
         print(f"Error cropping video: {e}")
 
 
+# crop the video w/ opencv
 def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Path, output_path: Path):
     cap = cv2.VideoCapture(str(input_path))
 
@@ -411,7 +372,6 @@ def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCen
             break
 
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
 
         # Crop frame
         crop_width = 608
