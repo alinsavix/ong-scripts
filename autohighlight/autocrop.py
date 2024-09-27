@@ -1,17 +1,18 @@
 #!/usr/bin/env python
 import argparse
+import logging
 import multiprocessing
 import os
 import subprocess
 import sys
-from collections import deque
+import time
 from dataclasses import dataclass
-from multiprocessing.pool import Pool, ThreadPool
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
+import torch
 from tdvutil import ppretty
 from ultralytics import YOLO
 from vidgear.gears import WriteGear
@@ -25,6 +26,8 @@ def log(msg):
     print(msg)
     sys.stdout.flush()
 
+def now():
+    return time.time()
 
 @dataclass
 class SingleCenterpoint:
@@ -114,12 +117,25 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     frame_num = 0
     stride = 1
 
-    model = YOLO("yolov8n.pt")  # pretrained YOLOv8n model
-    model.to("cuda")
+    # import torch
+    # torch.mps.set_device(0)
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
 
-    results = model.track(video_file, show=False, stream=True, classes=[
-                          0], vid_stride=stride, tracker="bytetrack.yaml")
+    log(f"Using torch device '{device}' with model {args.model}")
 
+    start_time = now()
+    model = YOLO(args.model).to(device)
+
+    results = model.track(video_file, show=args.show, stream=True, classes=[0], vid_stride=stride, tracker="bytetrack.yaml", verbose=args.verbose)
+
+    log(f"Model initialized in {(now() - start_time)*1000:0.1f}ms")
+
+    start_time = now()
     for result in results:
         if len(result.boxes) > 0:
             bbox = result.boxes[0].xywh[0]
@@ -131,6 +147,9 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
             initial_centerpoints[frame_num + i] = cp
 
         frame_num += stride
+
+    detect_time = now() - start_time
+    log(f"Ran detections on {frame_num} frames in {detect_time:0.3f}s ({(detect_time/frame_num) * 1000:0.1f}ms/frame)")
 
     with open(cp_file, 'w') as f:
         for key in sorted(initial_centerpoints.keys()):
@@ -431,22 +450,49 @@ def parse_args() -> argparse.Namespace:
         help="The video file(s) to process",
     )
 
+    # yolov8n.pt
+
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="yolov8n.pt",
+        nargs=1,
+        help="Which YOLO model to use for Ong detection",
+    )
+
     parser.add_argument(
         "--debug",
         action="store_true",
+        default=False,
         help="Diplay object detection and centerpoint info",
+    )
+
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Display YOLO 'verbose' output",
     )
 
     parser.add_argument(
         "--force-detection",
         action="store_true",
+        default=False,
         help="Force (re)detection of Ong positions",
     )
 
     parser.add_argument(
-        "--force-crop",
+        "--force-crop", "--force",
         action="store_true",
+        default=False,
         help="Force (re)cropping of video",
+    )
+
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        default=False,
+        help="Visually show object detections",
     )
 
     parser_results = parser.parse_args()
@@ -508,7 +554,7 @@ def main():
             print(f"Error combining video and audio: {e}")
 
         # Clean up intermediate file
-        os.remove(output_path)
+        output_path.unlink()
 
 
 if __name__ == "__main__":

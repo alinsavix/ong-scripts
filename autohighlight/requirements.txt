@@ -4,5 +4,6 @@ tesserocr
 opencv-contrib-python
 pillow
 vidgear
-mediapipe
 setuptools
+ultralytics
+lapx
