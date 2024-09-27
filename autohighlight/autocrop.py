@@ -16,6 +16,10 @@ from tdvutil import ppretty
 from ultralytics import YOLO
 from vidgear.gears import WriteGear
 
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    FFMPEG_BIN = os.path.join(sys._MEIPASS, "ffmpeg")
+else:
+    FFMPEG_BIN = "ffmpeg"
 
 def log(msg):
     print(msg)
@@ -111,6 +115,7 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     stride = 1
 
     model = YOLO("yolov8n.pt")  # pretrained YOLOv8n model
+    model.to("cuda")
 
     results = model.track(video_file, show=False, stream=True, classes=[
                           0], vid_stride=stride, tracker="bytetrack.yaml")
@@ -325,7 +330,7 @@ def crop_video_new(args: argparse.Namespace, smoothed_centerpoints: List[Smoothe
     f.close()
 
     ffmpeg_cmd = [
-        "ffmpeg",
+        FFMPEG_BIN,
         "-r", "60",
         "-i", str(input_path),   # Original video input
         "-filter_complex", "[0:v]sendcmd=f=commands.txt,crop",
@@ -462,7 +467,7 @@ def main():
 
         print(f"Autocropping {vidfile}...")
 
-        output_filename = f"cropped_video_{vidfile.name}"
+        output_filename = f"tmp_crop_{vidfile.name}"
         output_path = vidfile.parent / output_filename
         final_filename = f"cropped_{vidfile.name}"
         final_path = vidfile.parent / final_filename
@@ -483,7 +488,7 @@ def main():
         crop_video(args, smoothed, vidfile, output_path)
 
         ffmpeg_cmd = [
-            "ffmpeg",
+            FFMPEG_BIN,
             "-i", str(output_path),  # Video input (output from previous processing)
             "-i", str(vidfile),      # Audio input (original file)
             "-c:v", "copy",          # Copy video codec
