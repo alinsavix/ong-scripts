@@ -1,9 +1,17 @@
 ffmpeg-python
 tdvutil
-tesserocr
+tesserocr ; sys_platform == "darwin" or sys_platform == "linux"
+https://github.com/simonflueckiger/tesserocr-windows_build/releases/download/tesserocr-v2.7.1-tesseract-5.4.1/tesserocr-2.7.1-cp312-cp312-win_amd64.whl ; sys_platform=="win32"
 opencv-contrib-python
 pillow
 vidgear
 setuptools
 ultralytics
 lapx
+# --index-url https://download.pytorch.org/whl/cu124 sys_platform == "win32"
+# torch
+# torchvision
+gspread
+dateparser
+sqlalchemy
+pyinstaller
