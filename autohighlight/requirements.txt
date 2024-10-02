@@ -15,3 +15,4 @@ gspread
 dateparser
 sqlalchemy
 pyinstaller
+openpyxl

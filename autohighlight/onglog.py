@@ -2,9 +2,11 @@
 import argparse
 import io
 import sys
+from datetime import datetime, timedelta
 from enum import IntEnum
 from pathlib import Path
-from typing import List
+from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 import dateparser
 import gspread
@@ -29,20 +31,6 @@ EARLIEST_ROW=767
 # EARLIEST_ROW=12900
 ONG_RANGE_NAME = f"Songs!A{EARLIEST_ROW}:I"
 
-# column offsets for the various onglog fields
-class Col(IntEnum):
-    FIRST = 0
-    DATE = 0
-    UPTIME = 1
-    ORDER = 2
-    REQUESTER = 3
-    TITLE = 4
-    GENRE = 5
-    TYPE = 6
-    LINKS = 7
-    LOOPER = 8
-    FILENUM = 9
-    LAST = 9
 
 Base = declarative_base()
 
@@ -61,36 +49,60 @@ class OngLog(Base):
     looper_slot = Column(sqlalchemy.Integer, nullable=True)
     looper_file_number = Column(sqlalchemy.Integer, nullable=True)
 
-# Create an engine and a session
-engine = sqlalchemy.create_engine('sqlite:///onglog.db')
-Base.metadata.create_all(engine)
-Session = sessionmaker(bind=engine)
-session = Session()
 
-# Example function to add a new onglog entry
-def add_onglog_entry(onglog_line_number, start_time, end_time, uptime, requester, title, genre, request_type, looper_slot, looper_file_number):
-    new_entry = OngLog(
-        onglog_line_number=onglog_line_number,
-        start_time=start_time,
-        end_time=end_time,
-        uptime=uptime,
-        requester=requester,
-        title=title,
-        genre=genre,
-        request_type=request_type,
-        looper_slot=looper_slot,
-        looper_file_number=looper_file_number
-    )
-    session.add(new_entry)
-    session.commit()
+class OngLogMeta(Base):
+    __tablename__ = 'onglogmeta'
+
+    key = Column(String, nullable=False, primary_key=True)
+    value = Column(String, nullable=False)
+
 
 # Example function to query onglog entries
 def get_onglog_entries():
     return session.query(OngLog).all()
 
+
 # Function to find onglog entry by a given date & time
 def find_onglog_entry_by_datetime(datetime):
     return session.query(OngLog).filter(OngLog.start_time <= datetime, OngLog.end_time >= datetime).all()
+
+
+def set_onglog_meta(key: str, value: str):
+    existing_entry = session.query(OngLogMeta).filter_by(key=key).first()
+
+    if existing_entry:
+        existing_entry.value = value
+    else:
+        new_entry = OngLogMeta(key=key, value=value)
+        session.add(new_entry)
+
+    try:
+        session.commit()
+    except sqlalchemy.exc.SQLAlchemyError as e:
+        session.rollback()
+        log(f"Error setting OngLogMeta: {e}")
+
+
+def get_onglog_meta(key: str) -> Optional[str]:
+    entry = session.query(OngLogMeta).filter_by(key=key).first()
+    if entry:
+        return entry.value
+
+    return None
+
+
+# # Create a datetime object for Saturday, September 18, 2024 at 8:00 AM
+# target_datetime = datetime(2024, 9, 29, 2, 0)
+# print(f"Target datetime: {target_datetime}")
+
+# # Find onglog entries for the target datetime
+# entries = find_onglog_entry_by_datetime(target_datetime)
+# print(f"Onglog entries found: {ppretty(entries)}")
+
+
+def log(msg):
+    print(msg)
+    sys.stdout.flush()
 
 
 def parse_arguments(argv: List[str]) -> argparse.Namespace:
@@ -108,6 +120,13 @@ def parse_arguments(argv: List[str]) -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--onglog-db-file",
+        type=Path,
+        default=Path(__file__).parent / 'onglog.db',
+        help="location of onglog database",
+    )
+
+    parser.add_argument(
         "--skip-fetch",
         default=False,
         action="store_true",
@@ -118,6 +137,7 @@ def parse_arguments(argv: List[str]) -> argparse.Namespace:
     return parsed_args
 
 
+# This is really a mess. Can we do better?
 def main(argv: List[str]) -> int:
     args = parse_arguments(argv[1:])
     onglog_tmp = Path(f"onglog_tmp.xlsx")
@@ -126,45 +146,64 @@ def main(argv: List[str]) -> int:
     # ws = onglog.worksheet("Songs")
 
     if not args.skip_fetch:
+        log("Fetching onglog...")
         dl = gc.export(file_id=ONG_SPREADSHEET_ID, format=gspread.utils.ExportFormat.EXCEL)
         onglog_tmp.write_bytes(dl)
-        print(f"Saved onglog backup as {onglog_tmp}")
+        log(f"Saved onglog backup as {onglog_tmp}")
     else:
-        print(f"Using existing onglog backup at {onglog_tmp}")
+        log(f"Using existing onglog backup at {onglog_tmp}")
+
+
+    # Database setup
+    engine = sqlalchemy.create_engine(f"sqlite:///{args.onglog_db_file}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    global session
+    session = Session()
 
     # By saying no header, it means we can keep the onglong row number equal
     # to the pd row number + 1
     df = pd.read_excel(onglog_tmp, header=None, sheet_name="Songs", names=["Date", "Uptime", "Order", "Requester", "Title", "Genre", "Type", "Links", "Looper", "FileNum"])
 
+    last_processed_row = get_onglog_meta("last_processed_row")
+    resume_row = 0
+    if last_processed_row:
+        start_row_num = int(last_processed_row) - 200 - 1
+        resume_row = int(last_processed_row)
+        log(f"Resuming from row {resume_row}")
+    else:
+        log(f"Starting from row {EARLIEST_ROW}")
+        start_row_num = EARLIEST_ROW
+
     # Find the first row with 'Order' value of 0 after or including EARLIEST_ROW
     order_zero_rows = df[df['Order'] == 0]
-    valid_rows = order_zero_rows[order_zero_rows.index >= EARLIEST_ROW - 1]
+    valid_rows = order_zero_rows[order_zero_rows.index >= start_row_num - 1]
     start_index = valid_rows.index.min() if not valid_rows.empty else None
 
     if not start_index:
-        print(f"No rows with 'Order' value of 0 found after row {EARLIEST_ROW}. Using EARLIEST_ROW as starting point.")
+        log(f"No rows with 'Order' value of 0 found after row {start_row_num}. Using EARLIEST_ROW as starting point.")
         start_index = EARLIEST_ROW - 1
     else:
-        print(f"Starting processing from row {start_index + 1}")
+        log(f"Starting processing from row {start_index + 1}")
+
+
+    eastern = ZoneInfo("America/New_York")
+    sydney = ZoneInfo("Australia/Sydney")
 
     # Adjust the loop to start from the identified row
     df_subset = df.iloc[start_index:]
     for index, row in df_subset.iterrows():
-        print(f"Processing row {index + 1}: {row.Title} ({row.Order})")
-        sys.stdout.flush()
+        assert isinstance(index, int)
+
+        if index >= resume_row:
+            log(f"Processing row {index + 1}: {row.Title} ({row.Order})")
 
         if row['Order'] == "-" or int(row['Order']) == 0:
             continue
 
         if not row['Date'] or row['Date'] == "-":
             continue
-
-        # Convert row data to OngLog object and write to database
-        from datetime import datetime, timedelta
-        from zoneinfo import ZoneInfo
-
-        eastern = ZoneInfo("America/New_York")
-        sydney = ZoneInfo("Australia/Sydney")
 
         # Convert start_time to Sydney time
         start_time_eastern = dateparser.parse(str(row['Date']))
@@ -179,7 +218,7 @@ def main(argv: List[str]) -> int:
             next_row = df.iloc[index + 1]
             if next_row['Order'] == 0:  # Start of a new stream
                 end_time = start_time + timedelta(hours=2) if start_time else None
-            elif next_row['Date'] == "-":
+            elif next_row['Date'] == "-":  # hopefully rare corner case
                 continue
             else:
                 end_time_eastern = dateparser.parse(str(next_row['Date']))
@@ -221,55 +260,10 @@ def main(argv: List[str]) -> int:
             session.add(onglog_entry)
             session.commit()
 
-    #     session.add(onglog_entry)
-    # session.commit()
-
-        # print(f"Processing row {index}: {row.Title}")
-        # add_onglog_entry(
-        #     onglog_line_number=row['onglog_line_number'],
-        #     start_time=row['start_time'],
-        #     end_time=row['end_time'],
-        #     uptime=row['uptime'],
-        #     requester=row['requester'],
-        # )
-    return 0
-    # This gets a list of all rows that start a new onglog chunk. This
-    # lets us process the onglog one "chunk" at a time. This may or may
-    # not be beneficial at this point.
-    #
-    # Annoyingly, the gsheets interface has columns 1-based instead of 0-based,
-    # so we'll see all sorts of "Col.SOMETHING + 1" type constructs in this code
-    cell_list = ws.findall("0", in_column=Col.ORDER + 1)
-
-    for i, cell in enumerate(cell_list):
-        if cell.row < EARLIEST_ROW:
-            continue
-
-        first_row = cell.row
-
-        try:
-            last_row = cell_list[i + 1].row - 1
-        except IndexError:
-            # If this is the last chunk, and there's not an empty chunk after,
-            # just pick an unreasonable size for the last chunk and use that.
-            last_row = first_row + 500
-
-        print(f"Processing rows {first_row} to {last_row}")
-
-        # make a full range query for the chunk we care about
-        upleft = gspread.utils.rowcol_to_a1(first_row, Col.FIRST + 1)
-        downright = gspread.utils.rowcol_to_a1(last_row, Col.LAST + 1)
-        range_query = f"{upleft}:{downright}"
-        print(f"Full range: {range_query}")
-
-        # fetch the data
-        rows = ws.get(range_query, major_dimension="ROWS")
-        print(type(rows))
-        # for j, row in enumerate(rows):
-        #     print(f"Row {j + first_row}: {ppretty(row)}")
-
+    set_onglog_meta("last_processed_row", str(index + 1))
 
     return 0
+
 
 if __name__ == "__main__":
     # make sure our output streams are properly encoded so that we can
