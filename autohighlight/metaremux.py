@@ -45,6 +45,7 @@ INDEX_DIR.mkdir(exist_ok=True)
 class VideoMeta:
     filename: str
     video_type: str
+    exact_times: bool
     start_time: Optional[str]
     end_time: Optional[str]
     duration: float
@@ -295,7 +296,9 @@ def remux_with_timecode(args: argparse.Namespace, video_file: Path, remux_file: 
     # log(f"DEBUG: replacing {vidfile} with {tmpfile}")
     tmpfile.replace(remux_file)
 
-    if not args.keep_original:
+    if args.trash_dir:
+        video_file.rename(args.trash_dir / video_file.name)
+    elif not args.keep_original:
         video_file.unlink()
 
     return True
@@ -306,7 +309,7 @@ def gen_metadata(args: argparse.Namespace, video_file: Path) -> Optional[VideoMe
         probeinfo = ffmpeg.probe(video_file)
     except ffmpeg.Error as e:
         print(f"ffmpeg couldn't open {video_file}, skipping")
-        return
+        return None
 
     # Find the first video stream
     video_stream = next((stream for stream in probeinfo['streams'] if stream['codec_type'] == 'video'), None)
@@ -323,7 +326,7 @@ def gen_metadata(args: argparse.Namespace, video_file: Path) -> Optional[VideoMe
     size_bytes = int(probeinfo['format']['size'])
 
     # Extract video type from filename
-    video_type = filename.split(' ')[0]
+    video_type = filename.split(" ")[0]
 
     timestamp = find_timestamp_in_range(args, video_file, 55, 30)
 
@@ -336,17 +339,25 @@ def gen_metadata(args: argparse.Namespace, video_file: Path) -> Optional[VideoMe
         start_time = add_duration(timestamp.ocr_ts, -timestamp.frame_ts)
         end_time = add_duration(start_time, duration)
 
-    metadata = VideoMeta(filename, video_type, start_time, end_time, duration, framerate, size_bytes)
+    match video_type:
+        case "clean" | "bruce":
+            exact_times = True
+        case "loop" | "stem":
+            exact_times = False
+        case _:
+            print(f"Unknown video type '{video_type}', assuming non-exact timestamps")
+            exact_times = False
+
+    metadata = VideoMeta(filename, video_type, exact_times, start_time, end_time, duration, framerate, size_bytes)
     return metadata
 
 
 def process_video(args: argparse.Namespace, video_file: Path, remuxed_file: Path, metadata_file: Path):
+    # print(f"Processing '{video_file}'")
     # if we already have metadata, and we're not forcing, skip
     if metadata_file.exists() and not args.force:
         print(f"Skipping '{video_file}': metadata already exists")
         return
-
-    print(f"Processing '{video_file}':")
 
     metadata = gen_metadata(args, video_file)
     if metadata is None:
@@ -386,6 +397,14 @@ def parse_args() -> argparse.Namespace:
         default=Path("."),
         action=CheckFile(must_exist=True),
         help="Directory to remux video files into"
+    )
+
+    parser.add_argument(
+        "--trash-dir",
+        type=Path,
+        default=None,
+        action=CheckFile(must_exist=True),
+        help="Directory to move video files into when done",
     )
 
     parser.add_argument(
@@ -441,15 +460,23 @@ def main():
     args = parse_args()
 
     for src_file in args.filenames:
-        remuxed_file = args.remux_dest_dir / (src_file.stem + '.mp4')
-        # print(f"Remuxing '{src_file}' to '{remuxed_file}'")
+        src_type = src_file.name.split(" ")[0]
+
+        match src_type:
+            case "stem":
+                remux_ext = ".m4a"
+            case _:
+                remux_ext = ".mp4"
+
+        remuxed_file = args.remux_dest_dir / (src_file.stem + remux_ext)
+        print(f"Remuxing '{src_file}' to '{remuxed_file}'")
         if remuxed_file.exists():
-            # print(f"Skipping '{filename}': '{remuxed_file}' already exists")
+            print(f"Skipping '{src_file}': '{remuxed_file}' already exists")
             continue
 
         metadata_file = remuxed_file.with_suffix(remuxed_file.suffix + '.meta')
         if metadata_file.exists():
-            # print(f"Skipping '{filename}': '{metadata_file}' already exists")
+            print(f"Skipping '{src_file}': '{metadata_file}' already exists")
             continue
 
         process_video(args, src_file, remuxed_file, metadata_file)
