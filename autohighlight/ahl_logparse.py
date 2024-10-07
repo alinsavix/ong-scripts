@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 import argparse
 import csv
 import re
@@ -70,6 +70,9 @@ def parse_logfile(logfile_path) -> List[datetime]:
             time_obj = datetime.strptime(logtime, "%H:%M:%S.%f").time()
 
             highlight_times.append(datetime.combine(current_date, time_obj))
+
+        elif "HIGHLIGHT SEGMENT CANCEL" in line:
+            highlight_times.pop()
 
     # for highlight_time in highlight_times:
     #     print(highlight_time.strftime("%Y-%m-%d %H:%M:%S.%f"))
