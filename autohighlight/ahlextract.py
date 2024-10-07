@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 import csv
 import json
 import subprocess
@@ -6,12 +6,14 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from onglog import find_onglog_entry_by_datetime
 from tdvutil import sec_to_hms, sec_to_shortstr
 
 # give ourselves a place to stuff our indexes
 script_dir = Path(__file__).parent.resolve()
 INDEX_DIR = script_dir / "indexes"
 INDEX_DIR.mkdir(exist_ok=True)
+
 
 def load_metadata(remux_dir):
     metadata = {}
@@ -21,6 +23,7 @@ def load_metadata(remux_dir):
             metadata[data['filename']] = data
     return metadata
 
+
 def load_highlight_requests(index_file):
     requests = []
     with open(index_file, 'r') as f:
@@ -28,6 +31,7 @@ def load_highlight_requests(index_file):
         for row in reader:
             requests.append(row)
     return requests
+
 
 def find_highlights(metadata, requests):
     highlights = []
@@ -43,6 +47,7 @@ def find_highlights(metadata, requests):
             if start_time <= request_time <= end_time:
                 highlights.append((filename, request['timestamp'], request['highlight_id']))
     return highlights
+
 
 def main():
     remux_dir = Path("x:/zTEMP/remux_tmp")
@@ -62,21 +67,23 @@ def main():
     for filename, timestamp, description in highlights:
         print(f"- {filename}: {timestamp} - {description}")
 
-    meta_lines = []
+    output_meta = {}
     for filename, timestamp, highlight_id in highlights:
         video_path = remux_dir / filename
         request_time = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f")
         start_time = datetime.strptime(metadata[filename]['start_time'], "%Y-%m-%d %H:%M:%S.%f")
         start_date = metadata[filename]['start_time'].split(" ")[0]
 
-        time_offset = (request_time - start_time).total_seconds() + 5
+        time_offset = (request_time - start_time).total_seconds() + 3
         offset_str = sec_to_hms(time_offset).split(".")[0]
 
         output_filename = f"highlight_{highlight_id}_{start_date}_uptime_{sec_to_shortstr(time_offset)}.mp4"
         output_path = autohighlight_dir / output_filename
 
+        metadata_filename = f"highlight_{highlight_id}_{start_date}_uptime_{sec_to_shortstr(time_offset)}.txt"
+        metadata_path = autohighlight_dir / metadata_filename
 
-        meta_lines.append(f"{highlight_id},{start_date},{offset_str}")
+
 
         if output_path.exists():
             print(f"Highlight {highlight_id} from {filename} already exists. Skipping.")
@@ -108,6 +115,20 @@ def main():
         except subprocess.CalledProcessError as e:
             print(f"Error extracting highlight: {e}")
             print(f"ffmpeg stderr: {e.stderr}")
+            continue
+
+        output_meta["highlight_id"] = highlight_id
+        output_meta["request_time"] = str(request_time)
+        output_meta["request_uptime"] = sec_to_hms(time_offset)
+        output_meta["original_filename"] = filename
+
+        logentry = find_onglog_entry_by_datetime(request_time)
+        # print(f"logentry: {logentry}")
+        if logentry:
+            output_meta["title"] = logentry.title
+            output_meta["requester"] = logentry.requester
+
+        metadata_path.write_text(json.dumps(output_meta, indent=4))
 
     print("\nHighlight extraction complete.")
     # output_index_file.write_text("\n".join(meta_lines))
