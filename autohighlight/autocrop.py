@@ -151,10 +151,11 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     detect_time = now() - start_time
     log(f"Ran detections on {frame_num} frames in {detect_time:0.3f}s ({(detect_time/frame_num) * 1000:0.1f}ms/frame)")
 
-    with open(cp_file, 'w') as f:
-        for key in sorted(initial_centerpoints.keys()):
-            cp = initial_centerpoints[key]
-            f.write(f"{key},{cp.detection_success},{cp.detection_area},{cp.detection_center}\n")
+    if args.keep_centerpoints:
+        with open(cp_file, 'w') as f:
+            for key in sorted(initial_centerpoints.keys()):
+                cp = initial_centerpoints[key]
+                f.write(f"{key},{cp.detection_success},{cp.detection_area},{cp.detection_center}\n")
 
     return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
 
@@ -486,6 +487,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Force (re)cropping of video",
+    )
+
+    parser.add_argument(
+        "--keep-centerpoints",
+        action="store_true",
+        default=False,
+        help="Keep the centerpoint analysis in .centerpoints file",
     )
 
     parser.add_argument(
