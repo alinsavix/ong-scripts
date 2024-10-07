@@ -57,14 +57,34 @@ class OngLogMeta(Base):
     value = Column(String, nullable=False)
 
 
+_session_initialized = False
+def init_db_session():
+    global _session_initialized
+    if _session_initialized:
+        return
+
+    # Database setup
+    onglog_db_file = Path(__file__).parent / 'onglog.db'
+    engine = sqlalchemy.create_engine(f"sqlite:///{onglog_db_file}")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    global session
+    session = Session()
+
+    _session_initialized = True
+
+
 # Example function to query onglog entries
 def get_onglog_entries():
+    init_db_session()
     return session.query(OngLog).all()
 
 
 # Function to find onglog entry by a given date & time
 def find_onglog_entry_by_datetime(datetime):
-    return session.query(OngLog).filter(OngLog.start_time <= datetime, OngLog.end_time >= datetime).all()
+    init_db_session()
+    return session.query(OngLog).filter(OngLog.start_time <= datetime, OngLog.end_time >= datetime).first()
 
 
 def set_onglog_meta(key: str, value: str):
@@ -153,14 +173,7 @@ def main(argv: List[str]) -> int:
     else:
         log(f"Using existing onglog backup at {onglog_tmp}")
 
-
-    # Database setup
-    engine = sqlalchemy.create_engine(f"sqlite:///{args.onglog_db_file}")
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-
-    global session
-    session = Session()
+    init_db_session()
 
     # By saying no header, it means we can keep the onglong row number equal
     # to the pd row number + 1
@@ -198,6 +211,9 @@ def main(argv: List[str]) -> int:
 
         if index >= resume_row:
             log(f"Processing row {index + 1}: {row.Title} ({row.Order})")
+
+        if not pd.notna(row['Date']):
+            continue
 
         if row['Order'] == "-" or int(row['Order']) == 0:
             continue
