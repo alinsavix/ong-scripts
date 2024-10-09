@@ -42,9 +42,10 @@ INDEX_DIR.mkdir(exist_ok=True)
 
 
 @dataclass
-class VideoMeta:
+class MediaMeta:
     filename: str
-    video_type: str
+    content_class: str
+    media_types: str
     exact_times: bool
     start_time: Optional[str]
     end_time: Optional[str]
@@ -191,6 +192,34 @@ def find_timestamp_in_range(args: argparse.Namespace, filename: Path, start_time
     return None
 
 
+filename_re = re.compile(r"""
+    ^
+    (?P<content_class> \w+)
+    \s
+    (?P<date> \d{4}-\d{2}-\d{2})
+    \s
+    (?P<time_h> \d{2})h
+    (?P<time_m> \d{2})m
+    (?P<time_s> \d{2})s
+    \.
+    """, re.VERBOSE)
+
+# function to extract an approximate timestamp from the filename
+def approx_timestamp_from_filename(filename: Path) -> Optional[FoundTimestamp]:
+    m = filename_re.match(filename.name)
+    if not m:
+        return None
+
+    timestr = f"{m.group('time_h')}:{m.group('time_m')}:{m.group('time_s')}"
+    datestr = m.group('date')
+
+    # The last field here is fps ... not sure what the best way to handle that
+    # actually is, in the case of videos that have no OCR-able metadata, but
+    # are still videos.
+    ts = FoundTimestamp(f"{datestr} {timestr}.0", 0.0, 0)
+    return ts
+
+
 def dt_to_secs(dt: str) -> float:
     tc = dt.split(" ")[1]
     # dt.strftime("%H:%M:%S.%f")
@@ -209,7 +238,7 @@ def dt_to_timecode(dt: str, fps: float) -> str:
 
 
 # FIXME: Only expected to work with integer framerates.
-def remux_with_timecode(args: argparse.Namespace, video_file: Path, remux_file: Path, metadata: VideoMeta) -> bool:
+def remux_with_timecode(args: argparse.Namespace, video_file: Path, remux_file: Path, metadata: MediaMeta) -> bool:
     # Not writing actual timecode right now
     # if metadata.start_time is None:
     #     print(f"WARNING: No start time found for '{video_file}', skipping")
@@ -296,39 +325,61 @@ def remux_with_timecode(args: argparse.Namespace, video_file: Path, remux_file: 
     # log(f"DEBUG: replacing {vidfile} with {tmpfile}")
     tmpfile.replace(remux_file)
 
-    if args.trash_dir:
+    if args.keep_original:
+        return True
+    elif args.trash_dir:
         video_file.rename(args.trash_dir / video_file.name)
-    elif not args.keep_original:
+    else:
         video_file.unlink()
 
     return True
 
 
-def gen_metadata(args: argparse.Namespace, video_file: Path) -> Optional[VideoMeta]:
+# Generate metadata for audio-only file
+def gen_media_metadata(args: argparse.Namespace, media_file: Path) -> Optional[MediaMeta]:
     try:
-        probeinfo = ffmpeg.probe(video_file)
+        probeinfo = ffmpeg.probe(media_file)
     except ffmpeg.Error as e:
-        print(f"ffmpeg couldn't open {video_file}, skipping")
+        print(f"ffmpeg couldn't open {media_file}, skipping")
         return None
 
-    # Find the first video stream
-    video_stream = next((stream for stream in probeinfo['streams'] if stream['codec_type'] == 'video'), None)
-    if video_stream is None:
-        print(f"No video stream found in {video_file}, skipping")
+    media_types = ""
+
+    # Find the first audio stream (if there is one)
+    audio_stream = next(
+        (stream for stream in probeinfo['streams'] if stream['codec_type'] == 'audio'), None)
+    if audio_stream is not None:
+        media_types += "audio"
+
+    # Find the first video stream (if there is one)
+    video_stream = next(
+        (stream for stream in probeinfo['streams'] if stream['codec_type'] == 'video'), None)
+    if video_stream is not None:
+        media_types += "video"
+
+        framerate_str = video_stream['r_frame_rate']
+        framerate_num, framerate_den = map(int, framerate_str.split('/'))
+        framerate = round(framerate_num / framerate_den)
+    else:
+        framerate = 0
+
+    if media_types == "":
+        print(f"No media streams found in {media_file}, skipping metadata generation")
         return None
 
-    framerate_str = video_stream['r_frame_rate']
-    framerate_num, framerate_den = map(int, framerate_str.split('/'))
-    framerate = round(framerate_num / framerate_den)
+    if "video" in media_types:
+        timestamp = find_timestamp_in_range(args, media_file, 55, 30)
+        exact_times = True
+    else:
+        timestamp = approx_timestamp_from_filename(media_file)
+        exact_times = False
 
-    filename = video_file.name
+    filename = media_file.name
     duration = float(probeinfo['format']['duration'])
     size_bytes = int(probeinfo['format']['size'])
 
-    # Extract video type from filename
-    video_type = filename.split(" ")[0]
-
-    timestamp = find_timestamp_in_range(args, video_file, 55, 30)
+    # Extract the content type from filename
+    content_class = filename.split(" ")[0]
 
     if timestamp is None:
         # print("No timestamp found")
@@ -339,27 +390,28 @@ def gen_metadata(args: argparse.Namespace, video_file: Path) -> Optional[VideoMe
         start_time = add_duration(timestamp.ocr_ts, -timestamp.frame_ts)
         end_time = add_duration(start_time, duration)
 
-    match video_type:
-        case "clean" | "bruce":
-            exact_times = True
-        case "loop" | "stem":
-            exact_times = False
-        case _:
-            print(f"Unknown video type '{video_type}', assuming non-exact timestamps")
-            exact_times = False
+    # match content_class:
+    #     case "clean" | "bruce":
+    #         exact_times = True
+    #     case "loop" | "stem":
+    #         exact_times = False
+    #     case _:
+    #         print(f"Unknown content class '{content_class}', assuming non-exact timestamps")
+    #         exact_times = False
 
-    metadata = VideoMeta(filename, video_type, exact_times, start_time, end_time, duration, framerate, size_bytes)
+    metadata = MediaMeta(filename, content_class, media_types, exact_times, start_time,
+                         end_time, duration, framerate, size_bytes)
     return metadata
 
 
-def process_video(args: argparse.Namespace, video_file: Path, remuxed_file: Path, metadata_file: Path):
+def process_media(args: argparse.Namespace, video_file: Path, remuxed_file: Path, metadata_file: Path):
     # print(f"Processing '{video_file}'")
     # if we already have metadata, and we're not forcing, skip
     if metadata_file.exists() and not args.force:
         print(f"Skipping '{video_file}': metadata already exists")
         return
 
-    metadata = gen_metadata(args, video_file)
+    metadata = gen_media_metadata(args, video_file)
     if metadata is None:
         print(f"Failed to generate metadata for '{video_file}'")
         print("WARNING: File will not be remuxed")
@@ -460,10 +512,12 @@ def main():
     args = parse_args()
 
     for src_file in args.filenames:
+        # Filenames should be in the form of: <type> <date> <timestring>.ext
+        # e.g.: clean 2024-02-29 12h34m56s.mp4
         src_type = src_file.name.split(" ")[0]
 
         match src_type:
-            case "stem":
+            case "stems":
                 remux_ext = ".m4a"
             case _:
                 remux_ext = ".mp4"
@@ -479,7 +533,7 @@ def main():
             print(f"Skipping '{src_file}': '{metadata_file}' already exists")
             continue
 
-        process_video(args, src_file, remuxed_file, metadata_file)
+        process_media(args, src_file, remuxed_file, metadata_file)
 
     global ocrapi
     if ocrapi is not None:
