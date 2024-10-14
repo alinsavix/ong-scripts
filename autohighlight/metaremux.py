@@ -390,14 +390,12 @@ def gen_media_metadata(args: argparse.Namespace, media_file: Path) -> Optional[M
         start_time = add_duration(timestamp.ocr_ts, -timestamp.frame_ts)
         end_time = add_duration(start_time, duration)
 
-    # match content_class:
-    #     case "clean" | "bruce":
-    #         exact_times = True
-    #     case "loop" | "stem":
-    #         exact_times = False
-    #     case _:
-    #         print(f"Unknown content class '{content_class}', assuming non-exact timestamps")
-    #         exact_times = False
+    # The looper feed is a bit of a special case, the times aren't actually
+    # exact because of the way ffmpeg does burned-in timecode. Really we
+    # should add something to the timecode itself to indicate that it's
+    # inexact, but for now this is good enough
+    if content_class == "loop":
+        exact_times = False
 
     metadata = MediaMeta(filename, content_class, media_types, exact_times, start_time,
                          end_time, duration, framerate, size_bytes)

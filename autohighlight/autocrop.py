@@ -5,10 +5,11 @@ import multiprocessing
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -100,6 +101,47 @@ class Task():
 
     def __str__(self):
         return f"Processing object detections on frame_num={self.frame_num}"
+
+
+# generate a temporary file with just the subset of the input video we want
+def extract_partial_video(args: argparse.Namespace, video_path: Path, tmpdir: Path, time_offset: float, length: float) -> Optional[Path]:
+    if not tmpdir.exists():
+        log(f"ERROR: video extraction temp directory doesn't exist")
+        return None
+
+    fh, _tmpfile = tempfile.mkstemp(suffix=".mp4", prefix="tmp_autocrop_", dir=tmpdir)
+    os.close(fh)
+    tmpfile = Path(_tmpfile)
+
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-ss", f"{time_offset}",
+        "-t", str(length),
+        "-i", str(video_path),
+        "-vsync", "vfr",
+        "-c:v", "h264_nvenc",
+        "-preset", "p3",
+        "-rc", "constqp",
+        "-qp", "16",
+        "-b:v", "0",
+        "-c:a", "alac",
+        "-y",
+        str(tmpfile)
+    ]
+
+    log(f"INFO: Extracting working file from {video_path}")
+    if args.debug:
+        log(f"DEBUG: Command: {' '.join(ffmpeg_cmd)}")
+
+    try:
+        subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+        log(f"INFO: Successfully extracted to working file {tmpfile}")
+    except subprocess.CalledProcessError as e:
+        log(f"ERROR: Couldn't extract working file: {e}")
+        log(f"ERROR: ffmpeg stderr: {e.stderr}")
+        return None
+
+    return tmpfile
 
 
 def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file: Path) -> List[SingleCenterpoint]:
@@ -521,32 +563,38 @@ def main():
 
         print(f"Autocropping {vidfile}...")
 
-        output_filename = f"tmp_crop_{vidfile.name}"
-        output_path = vidfile.parent / output_filename
-        final_filename = f"cropped_{vidfile.name}"
+        cropped_filename = f"tmp_crop_{vidfile.name}"
+        cropped_path = vidfile.parent / cropped_filename
+        final_filename = f"{vidfile.stem}_cropped{vidfile.suffix}"
         final_path = vidfile.parent / final_filename
 
         if final_path.exists() and not args.force_crop:
             print(f"Final file {final_path} already exists, skipping")
             continue
 
-        cpfile = vidfile.parent / (vidfile.name + ".centerpoints")
-        # print(cpfile)
+        workfile = extract_partial_video(args, vidfile, cropped_path.parent, 3, 60)
+        if workfile is None:
+            print(f"WARNING: Failed to extract working file, skipping")
+            continue
+
+        cpoint_file = vidfile.parent / (vidfile.name + ".centerpoints")
+
         log("Generating centerpoints...")
-        centerpoints = centerpoints_from_video(args, vidfile, cpfile)
+        centerpoints = centerpoints_from_video(args, workfile, cpoint_file)
         # print(centerpoints)
         log("Smoothing...")
         smoothed = smooth_centerpoints(centerpoints)
 
         log("Cropping...")
-        crop_video(args, smoothed, vidfile, output_path)
+        crop_video(args, smoothed, workfile, cropped_path)
 
+        log("Merging...")
         ffmpeg_cmd = [
             FFMPEG_BIN,
-            "-i", str(output_path),  # Video input (output from previous processing)
-            "-i", str(vidfile),      # Audio input (original file)
+            "-i", str(cropped_path),  # Video input (output from previous processing)
+            "-i", str(workfile),      # Audio input (original file)
             "-c:v", "copy",          # Copy video codec
-            "-c:a", "copy",          # Use AAC for audio codec
+            "-c:a", "libfdk_aac", "-vbr", "5", "-cutoff", "18000",  # Use AAC for audio codec
             "-map", "0:v:0",         # Use video from first input
             "-map", "1:a:0",         # Use audio from second input
             # "-shortest",           # Finish encoding when the shortest input ends
@@ -554,7 +602,6 @@ def main():
             final_path
         ]
 
-        log("Merging...")
         try:
             subprocess.run(ffmpeg_cmd, check=True)
             print(f"Successfully combined video and audio into {final_path}")
@@ -562,7 +609,8 @@ def main():
             print(f"Error combining video and audio: {e}")
 
         # Clean up intermediate file
-        output_path.unlink()
+        workfile.unlink(missing_ok=True)
+        cropped_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
