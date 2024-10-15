@@ -69,6 +69,7 @@ rsync_opts+=(
 #)
 rsync_opts+=(
     '--exclude=tmp*'
+    '--exclude=remux*'
 #    '--exclude=.??*'
 )
 

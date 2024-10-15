@@ -394,7 +394,7 @@ def gen_media_metadata(args: argparse.Namespace, media_file: Path) -> Optional[M
     # exact because of the way ffmpeg does burned-in timecode. Really we
     # should add something to the timecode itself to indicate that it's
     # inexact, but for now this is good enough
-    if content_class == "loop":
+    if content_class == "looper":
         exact_times = False
 
     metadata = MediaMeta(filename, content_class, media_types, exact_times, start_time,
@@ -473,7 +473,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--keep-original",
-        action="store_true",
+        action="store_false",
         default=True,
         help="Keep original video file",
     )

@@ -123,6 +123,14 @@ def parse_args() -> argparse.Namespace:
     #     help="Directory to move video files into when done",
     # )
 
+
+    parser.add_argument(
+        "--ffmpeg-bin",
+        type=str,
+        default="ffmpeg",
+        help="ffmpeg binary name or full path to use",
+    )
+
     parser.add_argument(
         "--force",
         action="store_true",
@@ -181,7 +189,6 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    autohighlight_dir = Path("x:/zTEMP/autohighlight_tmp")
 
     metadata = load_metadata(args.source_dir)
     requests = load_highlight_requests(args.index)
@@ -212,17 +219,17 @@ def main():
         input_ext = Path(filename).suffix
 
         output_filename = f"highlight_{highlight_id}_{content_class}_{start_date}{input_ext}"
-        output_path = autohighlight_dir / output_filename
+        output_path = args.dest_dir / output_filename
 
         metadata_filename = f"highlight_{highlight_id}_meta_{start_date}.txt"
-        metadata_path = autohighlight_dir / metadata_filename
+        metadata_path = args.dest_dir / metadata_filename
 
         if output_path.exists() and not args.force:
             log(f"INFO: Highlight {highlight_id} from {filename} already exists. Skipping.")
             continue
 
         ffmpeg_cmd = [
-            "ffmpeg",
+            args.ffmpeg_bin, "-hide_banner", "-hwaccel", "auto",
             "-ss", f"{time_offset}",
             "-t", str(args.extra_head + args.extract_length),
             "-i", str(video_path),

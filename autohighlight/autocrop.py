@@ -21,7 +21,7 @@ from vidgear.gears import WriteGear
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     FFMPEG_BIN = os.path.join(sys._MEIPASS, "ffmpeg")
 else:
-    FFMPEG_BIN = "ffmpeg"
+    FFMPEG_BIN = None  # use argument-specified ffmpeg
 
 def log(msg):
     print(msg)
@@ -114,7 +114,7 @@ def extract_partial_video(args: argparse.Namespace, video_path: Path, tmpdir: Pa
     tmpfile = Path(_tmpfile)
 
     ffmpeg_cmd = [
-        "ffmpeg",
+        FFMPEG_BIN if FFMPEG_BIN else args.ffmpeg_bin,
         "-ss", f"{time_offset}",
         "-t", str(length),
         "-i", str(video_path),
@@ -392,7 +392,7 @@ def crop_video_new(args: argparse.Namespace, smoothed_centerpoints: List[Smoothe
     f.close()
 
     ffmpeg_cmd = [
-        FFMPEG_BIN,
+        FFMPEG_BIN if FFMPEG_BIN else args.ffmpeg_bin,
         "-r", "60",
         "-i", str(input_path),   # Original video input
         "-filter_complex", "[0:v]sendcmd=f=commands.txt,crop",
@@ -501,6 +501,14 @@ def parse_args() -> argparse.Namespace:
         default="yolov8n.pt",
         nargs=1,
         help="Which YOLO model to use for Ong detection",
+    )
+
+
+    parser.add_argument(
+        "--ffmpeg-bin",
+        type=str,
+        default="ffmpeg",
+        help="ffmpeg binary name or full path to use",
     )
 
     parser.add_argument(
