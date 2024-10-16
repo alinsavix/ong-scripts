@@ -598,7 +598,7 @@ def main():
 
         log("Merging...")
         ffmpeg_cmd = [
-            FFMPEG_BIN,
+            FFMPEG_BIN if FFMPEG_BIN else args.ffmpeg_bin,
             "-i", str(cropped_path),  # Video input (output from previous processing)
             "-i", str(workfile),      # Audio input (original file)
             "-c:v", "copy",          # Copy video codec
