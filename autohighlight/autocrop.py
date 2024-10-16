@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import argparse
-import logging
-import multiprocessing
+# import logging
 import os
+import platform
 import subprocess
 import sys
 import tempfile
@@ -12,16 +12,24 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import cv2
-import numpy as np
 import torch
 from tdvutil import ppretty
 from ultralytics import YOLO
 from vidgear.gears import WriteGear
 
+# If we're built into an executable via pyinstaller, use the bundled ffmpeg.
+# Otherwise, set nothing here and resolve the ffmpeg path based on cli options
+# later.
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-    FFMPEG_BIN = os.path.join(sys._MEIPASS, "ffmpeg")
+    FFMPEG_BIN: str | None = os.path.join(sys._MEIPASS, "ffmpeg")
 else:
-    FFMPEG_BIN = None  # use argument-specified ffmpeg
+    FFMPEG_BIN = None
+
+if platform.system() == "Darwin":
+    FFMPEG_ENCODER = [ "-c:v", "libx264", "-crf", "16", "-preset", "medium", "-b:v", "0" ]
+else:
+    FFMPEG_ENCODER = ["-c:v", "h264_nvenc", "-preset", "p3", "-rc", "constqp","-qp", "16", "-b:v", "0" ]
+
 
 def log(msg):
     print(msg)
@@ -35,8 +43,6 @@ class SingleCenterpoint:
     detection_success: int
     detection_area: int
     detection_center: int
-    # smoothed_center: int
-    # smoothed_target_point: int
 
 @dataclass
 class SmoothedCenterpoint:
@@ -45,68 +51,10 @@ class SmoothedCenterpoint:
     smoothed_center_vel: float
 
 
-class Consumer(multiprocessing.Process):
-    def __init__(self, task_queue, result_queue):
-        multiprocessing.Process.__init__(self)
-        self.task_queue = task_queue
-        self.result_queue = result_queue
-
-    def run(self):
-        pname = self.name
-
-        # Set up mediapipe bits, if we're still doing that, once per
-        # worker process
-        # baseopts = base_options.BaseOptions(model_asset_path='efficientdet_lite2.tflite')
-        # detector_options = ObjectDetectorOptions(base_options=baseopts, score_threshold=0.5)
-        # detector = ObjectDetector.create_from_options(detector_options)
-
-        log(f"Consumer {pname} started")
-
-        # while not self.task_queue.empty():
-        while True:
-            temp_task = self.task_queue.get()
-            if temp_task is None:
-                log(f"Exit request for consumer {pname}")
-                self.task_queue.task_done()
-                break
-
-            # log(f"Processing task: {pname}, {temp_task}")
-
-            # result = temp_task.process(detector)
-            result = temp_task.process()
-            self.result_queue.put(result)
-            self.task_queue.task_done()
-
-
-class Task():
-    def __init__(self, args, frame_num, frame):
-        self.args = args
-        self.frame_num = frame_num
-        self.frame = frame
-
-    def process(self, detector):
-        frame_num = self.frame_num
-        frame = self.frame
-        args = self.args
-
-        # Convert the BGR image to RGB
-        # image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
-
-        # Perform object detection
-        # detection_result = detector.detect(mp_image)
-
-        # do some stuff, then return
-        # return frame_num, SingleCenterpoint(detection_success, bbox_area, current_center[0]), return_frame
-
-    def __str__(self):
-        return f"Processing object detections on frame_num={self.frame_num}"
-
-
 # generate a temporary file with just the subset of the input video we want
 def extract_partial_video(args: argparse.Namespace, video_path: Path, tmpdir: Path, time_offset: float, length: float) -> Optional[Path]:
     if not tmpdir.exists():
-        log(f"ERROR: video extraction temp directory doesn't exist")
+        log("ERROR: video extraction temp directory doesn't exist")
         return None
 
     fh, _tmpfile = tempfile.mkstemp(suffix=".mp4", prefix="tmp_autocrop_", dir=tmpdir)
@@ -115,15 +63,12 @@ def extract_partial_video(args: argparse.Namespace, video_path: Path, tmpdir: Pa
 
     ffmpeg_cmd = [
         FFMPEG_BIN if FFMPEG_BIN else args.ffmpeg_bin,
+        "-hide_banner", "-hwaccel", "auto",
         "-ss", f"{time_offset}",
         "-t", str(length),
         "-i", str(video_path),
         "-vsync", "vfr",
-        "-c:v", "h264_nvenc",
-        "-preset", "p3",
-        "-rc", "constqp",
-        "-qp", "16",
-        "-b:v", "0",
+        *FFMPEG_ENCODER,
         "-c:a", "alac",
         "-y",
         str(tmpfile)
@@ -139,6 +84,7 @@ def extract_partial_video(args: argparse.Namespace, video_path: Path, tmpdir: Pa
     except subprocess.CalledProcessError as e:
         log(f"ERROR: Couldn't extract working file: {e}")
         log(f"ERROR: ffmpeg stderr: {e.stderr}")
+        tmpfile.unlink(missing_ok=True)
         return None
 
     return tmpfile
@@ -148,7 +94,7 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     initial_centerpoints: Dict[int, SingleCenterpoint] = {}
 
     if cp_file.exists() and not args.force_detection:
-        with open(cp_file, 'r') as f:
+        with cp_file.open("r") as f:
             for line in f:
                 frame_num, detection_success, detection_area, detection_center = [
                     int(x) for x in line.strip().split(',')]
@@ -159,8 +105,7 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     frame_num = 0
     stride = 1
 
-    # import torch
-    # torch.mps.set_device(0)
+    # try to figure out what torch backend to use
     if torch.cuda.is_available():
         device = "cuda"
     elif torch.backends.mps.is_available():
@@ -173,13 +118,14 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     start_time = now()
     model = YOLO(args.model).to(device)
 
-    results = model.track(video_file, show=args.show, stream=True, classes=[0], vid_stride=stride, tracker="bytetrack.yaml", verbose=args.verbose)
+    results = model.track(video_file, show=args.show, stream=True, classes=[
+                          0], vid_stride=stride, tracker="bytetrack.yaml", verbose=args.verbose)
 
-    log(f"Model initialized in {(now() - start_time)*1000:0.1f}ms")
+    log(f"Model initialized in {(now() - start_time) * 1000:0.1f}ms")
 
     start_time = now()
     for result in results:
-        if len(result.boxes) > 0:
+        if result.boxes is not None and len(result.boxes) > 0:
             bbox = result.boxes[0].xywh[0]
             cp = SingleCenterpoint(1, int(bbox[2] * bbox[3]), int(bbox[0]))
         else:
@@ -191,10 +137,10 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
         frame_num += stride
 
     detect_time = now() - start_time
-    log(f"Ran detections on {frame_num} frames in {detect_time:0.3f}s ({(detect_time/frame_num) * 1000:0.1f}ms/frame)")
+    log(f"Ran detections on {frame_num} frames in {detect_time:0.3f}s ({(detect_time / frame_num) * 1000:0.1f}ms/frame)")
 
     if args.keep_centerpoints:
-        with open(cp_file, 'w') as f:
+        with cp_file.open("w") as f:
             for key in sorted(initial_centerpoints.keys()):
                 cp = initial_centerpoints[key]
                 f.write(f"{key},{cp.detection_success},{cp.detection_area},{cp.detection_center}\n")
@@ -202,120 +148,14 @@ def centerpoints_from_video(args: argparse.Namespace, video_file: Path, cp_file:
     return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
 
 
-def centerpoints_from_video_old(args: argparse.Namespace, video_file: Path, cp_file: Path) -> List[SingleCenterpoint]:
-    initial_centerpoints: Dict[int, SingleCenterpoint] = {}
-
-    if cp_file.exists():
-        with open(cp_file, 'r') as f:
-            for line in f:
-                frame_num, detection_success, detection_area, detection_center = line.strip().split(',')
-                initial_centerpoints[int(frame_num)] = SingleCenterpoint(
-                    int(detection_success), int(detection_area), int(detection_center))
-        return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
-    # Set up our detection model
-
-    # detector = ObjectDetector.create_from_options(detector_options)
-
-
-    # Initialize last_center as None
-    last_center = None
-
-    # Initialize variables for smoothing
-    center_smoothing_factor = 0.05
-    smoothed_center = None
-
-    # Initialize variables for target point and frame counter
-    target_point = None
-    target_smoothing_factor = 0.05
-    smoothed_target_point = None
-    distance_threshold = 50
-
-    smoothing_frame_counter = 0
-    frame_num = 0
-
-    num_consumers = multiprocessing.cpu_count()
-
-
-    # Limit our queue size so we don't completely fill memory with frames
-    tasks = multiprocessing.JoinableQueue(maxsize=num_consumers * 2)
-    results = multiprocessing.Queue()
-
-    log(f"Starting {num_consumers} consumers")
-
-    consumers = [Consumer(tasks, results) for _ in range(num_consumers)]
-    for consumer in consumers:
-        consumer.daemon = True
-        consumer.start()
-
-    cap = cv2.VideoCapture(video_file)
-    try:
-        while True:
-
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            frame_num += 1
-
-            # if frame_num > 400:
-            #     break
-
-            # args, detector_options, frame_num, frame
-            # log(f"Putting task {frame_num}")
-            task = Task(args, frame_num, frame)
-            tasks.put(task)
-
-            while not results.empty():
-                fn, cp, fr = results.get()
-                # log(f"Got result {fn}, {cp}")
-                initial_centerpoints[fn] = cp
-                if fr is not None:
-                    cv2.imshow('Cropped Object Detection', fr)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
-
-        # we've sent all the tasks, send them an exit command
-        for i in range(num_consumers):
-            # log(f"Putting exit task {i}")
-            tasks.put(None)
-
-        tasks.join()
-
-        while not results.empty():
-            fn, cp, fr = results.get()
-            # print(f"Got result {fn}, {cp}")
-            initial_centerpoints[fn] = cp
-            if fr is not None:
-                cv2.imshow('Cropped Object Detection', fr)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-
-    except KeyboardInterrupt:
-        for consumer in consumers:
-            consumer.terminate()
-
-    # print("Done")
-    # while len(pending) > 0:
-    #     if pending[0].ready():
-    #         fn, cp, fr = pending.popleft().get()
-    #         centerpoints[fn] = cp
-
-    cap.release()
-    cv2.destroyAllWindows()
-
-    log(f"Done (frames: {len(initial_centerpoints)})")
-
-    with open(cp_file, 'w') as f:
-        for key in sorted(initial_centerpoints.keys()):
-            cp = initial_centerpoints[key]
-            f.write(f"{key},{cp.detection_success},{cp.detection_area},{cp.detection_center}\n")
-
-    return [initial_centerpoints[key] for key in sorted(initial_centerpoints.keys())]
-
-
 # This does the mass-spring-damper thing, courtesy of the amazing Penwywern
 # (see https://en.wikipedia.org/wiki/Mass-spring-damper_model)
-def calcnewx(oldx, oldv, center, timestep=0.0166, freq=1, damp=1):
+#
+# freq should probably be adjusted to match the actual frame interval so that
+# 'damp' actually ends up being a time in seconds, but what's here works for
+# now.
+def calcnewx(oldx: float, oldv: float, center: float, timestep: float = 0.0166,
+             freq: float = 1.0, damp: float = 1.0) -> Tuple[float, float]:
     accel = -2 * damp * freq * oldv - freq**2 * (oldx - center)
     newv = oldv + accel * timestep
     newx = oldx + newv * timestep
@@ -344,10 +184,13 @@ def smooth_centerpoints(centerpoints: List[SingleCenterpoint]) -> List[SmoothedC
         last_center = current_center
 
         if new_x is None or new_v is None:
-            new_x = current_center
-            new_v = 0
+            new_x = float(current_center)
+            new_v = 0.0
 
         new_x, new_v = calcnewx(new_x, new_v, current_center)
+
+    assert new_x is not None
+    assert new_v is not None
 
     # And now do it for real
     last_center = None
@@ -366,16 +209,21 @@ def smooth_centerpoints(centerpoints: List[SingleCenterpoint]) -> List[SmoothedC
     return smoothed_centerpoints
 
 
-# crop a video w/ ffmpeg's crop (but seems wonky?)
+# this function crops a video using ffmpeg's "sendcmd" filter, and *should* be
+# identical to our existing crop code, only faster. However, it appears that it
+# actually produces something different, and less smooth, and it's not obvious
+# why. Keeping it here so we can revisit it, though.
+#
+# FIXME: revisit
 def crop_video_new(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Path, output_path: Path):
     print(f"cropping {input_path} -> {output_path}")
-    frame_width=1920
-    frame_height= 1080
+    frame_width = 1920
+    frame_height = 1080
 
     crop_width = 608
     crop_height = 1080
 
-    frametime = 1/60.0
+    frametime = 1 / 60.0
 
     f = Path("commands.txt").open("w")
 
@@ -387,17 +235,18 @@ def crop_video_new(args: argparse.Namespace, smoothed_centerpoints: List[Smoothe
             f.write(f"0 crop w {crop_width}, crop h {crop_height}, crop x {left}, crop y {top};\n")
         else:
             f.write(
-            f"{i * frametime - 0.005} crop w {crop_width}, crop h {crop_height}, crop x {left}, crop y {top};\n")
+                f"{i * frametime - 0.005} crop w {crop_width}, crop h {crop_height}, crop x {left}, crop y {top};\n")
 
     f.close()
 
     ffmpeg_cmd = [
         FFMPEG_BIN if FFMPEG_BIN else args.ffmpeg_bin,
+        "-hide_banner", "-hwaccel", "auto",
         "-r", "60",
         "-i", str(input_path),   # Original video input
         "-filter_complex", "[0:v]sendcmd=f=commands.txt,crop",
         "-an",
-        "-c:v", "libx264", "-crf", "20", "-preset", "medium",
+        *FFMPEG_ENCODER,
         "-pix_fmt", "yuv420p",
         # "-shortest",           # Finish encoding when the shortest input ends
         "-y",
@@ -411,8 +260,10 @@ def crop_video_new(args: argparse.Namespace, smoothed_centerpoints: List[Smoothe
         print(f"Error cropping video: {e}")
 
 
-# crop the video w/ opencv
-def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCenterpoint], input_path: Path, output_path: Path):
+# copy the video to a new file, cropping as we go based on previously generated
+# and smoothed detection centerpoint info
+def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCenterpoint],
+               input_path: Path, output_path: Path):
     cap = cv2.VideoCapture(str(input_path))
 
     # Get video properties
@@ -424,10 +275,12 @@ def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCen
         print(f"Autocropping currently supported only for 1080p videos (width was {width})")
         return
 
-    output_params = {"-vcodec": "libx264", "-crf": 20, "-preset": "medium", "-pix_fmt": "yuv420p",
-                     "-input_framerate": 60,
-                     "-output_dimensions": (608, 1080)
-                     }
+    # FIXME: see if we can use nvenc here
+    output_params = {
+        "-vcodec": "libx264", "-crf": 20, "-preset": "medium", "-pix_fmt": "yuv420p",
+        "-input_framerate": 60,
+        "-output_dimensions": (608, 1080)
+    }
     out = WriteGear(output=str(output_path), logging=False, **output_params)
 
     frame_counter = 0
@@ -450,8 +303,7 @@ def crop_video(args: argparse.Namespace, smoothed_centerpoints: List[SmoothedCen
         # that happens.
         try:
             scp = smoothed_centerpoints[frame_counter]
-            left = int(max(0, min(scp.smoothed_center_x -
-                       crop_width // 2, frame.shape[1] - crop_width)))
+            left = int(max(0, min(scp.smoothed_center_x - crop_width // 2, frame.shape[1] - crop_width)))
             prev = left
         except IndexError:
             log(f"warning: off-by-one (no centerpoint for frame {frame_counter})")
@@ -582,7 +434,7 @@ def main():
 
         workfile = extract_partial_video(args, vidfile, cropped_path.parent, 3, 60)
         if workfile is None:
-            print(f"WARNING: Failed to extract working file, skipping")
+            print("WARNING: Failed to extract working file, skipping")
             continue
 
         cpoint_file = vidfile.parent / (vidfile.name + ".centerpoints")
