@@ -1,5 +1,6 @@
 #!/bin/bash
 set -o errtrace
+umask 022
 
 error_count=0
 log_error() {
