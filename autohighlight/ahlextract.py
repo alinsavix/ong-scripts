@@ -67,7 +67,7 @@ def find_highlights(metadata, requests, content_class):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Ginerate Ong video metadata",
+        description="Generate Ong video metadata",
     )
 
     parser.add_argument(
