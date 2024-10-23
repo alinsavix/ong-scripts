@@ -68,9 +68,14 @@ echo "TASK: extract highlights"
 echo "TASK: generate autocrops"
 
 # FIXME: come up with a better way to identify what actually needs cropping
-# ./autocrop.py --ffmpeg-bin /usr/local/bin/ong-ffmpeg /ong/autohighlights/highlight_*_clean_????-??-??.mp4
+./autocrop.py --ffmpeg-bin /usr/local/bin/ong-ffmpeg /ong/autohighlights/highlight_*_clean_????-??-??.mp4
 
 if [[ $error_count -gt 0 ]]; then
     echo "WARNING: ${error_count} tasks failed, this (probably) shouldn't happen"
     exit 1
 fi
+
+
+# finally, try to restart the sync process again so that it syncs the cropped
+# highlights, too, as soon as they're done processing.
+systemctl try-restart ong-datasync.service || /bin/true
