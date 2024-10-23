@@ -83,10 +83,11 @@ def kill_ffmpeg():
     if subproc.poll() is None:
         log("INFO: asking ffmpeg to exit")
         subproc.terminate()
-        subproc.wait(15)
 
-    if subproc.poll() is None:
-        log("INFO: outright demanding ffmpeg to exit")
+    try:
+        subproc.wait(15)
+    except subprocess.TimeoutExpired:
+        log("INFO: ffmpeg didn't exit on its own, outright killing it")
         subproc.kill()
 
     log("INFO: I bask in your favor, I have killed the king^W^W ffmpeg")
