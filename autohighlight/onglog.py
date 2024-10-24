@@ -11,10 +11,10 @@ from zoneinfo import ZoneInfo
 import dateparser
 import gspread
 import pandas as pd
-import sqlalchemy
-from sqlalchemy import (Column, DateTime, Float, Integer, String, Time,
-                        create_engine)
-from sqlalchemy.orm import declarative_base, sessionmaker
+from peewee import (SQL, AutoField, CharField, DateTimeField, FloatField,
+                    IntegerField, Model, SqliteDatabase)
+from playhouse.sqlite_ext import (FTS5Model, RowIDField, SearchField,
+                                  SqliteExtDatabase)
 from tdvutil import hms_to_sec, ppretty
 from tdvutil.argparse import CheckFile
 
@@ -32,82 +32,86 @@ EARLIEST_ROW=767
 ONG_RANGE_NAME = f"Songs!A{EARLIEST_ROW}:I"
 
 
-Base = declarative_base()
-
-class OngLog(Base):
-    __tablename__ = 'onglog'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    onglog_line_number = Column(sqlalchemy.Integer, unique=True, nullable=False, index=True)
-    start_time = Column(sqlalchemy.DateTime, nullable=False, index=True)
-    end_time = Column(sqlalchemy.DateTime, nullable=False, index=True)
-    stream_uptime = Column(sqlalchemy.Float, nullable=True)
-    requester = Column(sqlalchemy.String, nullable=True)
-    title = Column(sqlalchemy.String, nullable=False)
-    genre = Column(sqlalchemy.String, nullable=True)
-    request_type = Column(sqlalchemy.String, nullable=True)
-    looper_slot = Column(sqlalchemy.Integer, nullable=True)
-    looper_file_number = Column(sqlalchemy.Integer, nullable=True)
+class OngLog(Model):
+    # __tablename__ = 'onglog'
+    rowid = IntegerField(primary_key=True, null=False)
+    start_time = DateTimeField(index=True, null=False)
+    end_time = DateTimeField(index=True, null=False)
+    stream_uptime = FloatField(null=True)
+    requester = CharField(null=True, index=True)
+    title = CharField(null=False)
+    genre = CharField(null=True)
+    request_type = CharField(null=True)
+    looper_slot = CharField(null=True)
+    looper_file_number = IntegerField(null=True)
 
 
-class OngLogMeta(Base):
-    __tablename__ = 'onglogmeta'
+class OngLogIndex(FTS5Model):
+    rowid = RowIDField()
+    title = SearchField()
 
-    key = Column(String, nullable=False, primary_key=True)
-    value = Column(String, nullable=False)
+    class Meta:
+        options = {"tokenize": "unicode61"}
 
 
-_session_initialized = False
-def init_db_session():
-    global _session_initialized
-    if _session_initialized:
+class OngLogMeta(Model):
+    key = CharField(primary_key=True)
+    value = CharField()
+
+
+_db: SqliteExtDatabase
+_db_initialized = False
+def initialize_db():
+    global _db_initialized
+    if _db_initialized:
         return
 
-    # Database setup
     onglog_db_file = Path(__file__).parent / 'onglog.db'
-    engine = sqlalchemy.create_engine(f"sqlite:///{onglog_db_file}")
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
 
-    global session
-    session = Session()
+    global _db
+    _db = SqliteExtDatabase(None)
+    _db.init(onglog_db_file, pragmas={"journal_mode": "wal", "cache_size": -1 * 64 * 1024})
+    _db.bind([OngLog, OngLogMeta, OngLogIndex])
+    _db.connect()
+    _db.create_tables([OngLog, OngLogMeta, OngLogIndex])
 
-    _session_initialized = True
+    _db_initialized = True
+
+
+def get_db():
+    initialize_db()
+
+    global _db
+    return _db
 
 
 # Example function to query onglog entries
-def get_onglog_entries():
-    init_db_session()
-    return session.query(OngLog).all()
+# def get_onglog_entries():
+#     get_db()
+#     return session.query(OngLog).all()
 
 
 # Function to find onglog entry by a given date & time
 def find_onglog_entry_by_datetime(datetime):
-    init_db_session()
-    return session.query(OngLog).filter(OngLog.start_time <= datetime, OngLog.end_time >= datetime).first()
+    # db = get_db()
+    # return session.query(OngLog).filter(OngLog.start_time <= datetime, OngLog.end_time >= datetime).first()
+    return OngLog.select().where((OngLog.start_time <= datetime) & (OngLog.end_time >= datetime)).first()
 
 
 def set_onglog_meta(key: str, value: str):
-    existing_entry = session.query(OngLogMeta).filter_by(key=key).first()
-
-    if existing_entry:
-        existing_entry.value = value
-    else:
-        new_entry = OngLogMeta(key=key, value=value)
-        session.add(new_entry)
-
-    try:
-        session.commit()
-    except sqlalchemy.exc.SQLAlchemyError as e:
-        session.rollback()
-        log(f"Error setting OngLogMeta: {e}")
+    meta = OngLogMeta.replace(
+        key=key,
+        value=value
+    )
+    meta.execute()
 
 
 def get_onglog_meta(key: str) -> Optional[str]:
-    entry = session.query(OngLogMeta).filter_by(key=key).first()
-    if entry:
-        return entry.value
+    m = OngLogMeta.get_or_none(OngLogMeta.key == key)
+    if m:
+        return m.value
 
+    # else
     return None
 
 
@@ -139,18 +143,19 @@ def parse_arguments(argv: List[str]) -> argparse.Namespace:
         help="credentials file to use",
     )
 
-    parser.add_argument(
-        "--onglog-db-file",
-        type=Path,
-        default=Path(__file__).parent / 'onglog.db',
-        help="location of onglog database",
-    )
+    # FIXME: make this work again
+    # parser.add_argument(
+    #     "--onglog-db-file",
+    #     type=Path,
+    #     default=Path(__file__).parent / 'onglog.db',
+    #     help="location of onglog database",
+    # )
 
     parser.add_argument(
-        "--skip-fetch",
+        "--force-fetch",
         default=False,
         action="store_true",
-        help="skip fetching the onglog",
+        help="force fetching the onglog, even if ours is recent",
     )
 
     parsed_args = parser.parse_args(argv)
@@ -165,21 +170,72 @@ def main(argv: List[str]) -> int:
     # onglog = gc.open_by_url(ONG_SPREADSHEET_URL)
     # ws = onglog.worksheet("Songs")
 
-    if not args.skip_fetch:
-        log("Fetching onglog...")
+    initialize_db()
+
+    # a bunch of testing code, commented out, that we need to come back to
+    # z = datetime(2024,10,6,5,40,15)
+    # print(z)
+    # x = find_onglog_entry_by_datetime(z)
+    # print(x)
+    # sys.exit(0)
+
+    # x = OngLog.select().join(OngLogIndex, on=(OngLog.rowid == OngLogIndex.rowid)).where(OngLogIndex.match("weight of the world"))
+
+    # x = OngLogIndex.search(
+    #     "weight world",
+    #     weights={"title": 2.0},
+    #     with_score=True,
+    #     score_alias="score").join(OngLog, on=(OngLogIndex.rowid == OngLog.rowid)).distinct([OngLog.title]).execute()
+
+    # x = OngLogIndex.search(
+    #     "weight world",
+    #     weights={"title": 2.0},
+    #     with_score=True,
+    #     score_alias="score").order_by(SQL("score")).execute() # order_by(OngLogIndex.score.desc()).limit(10).execute()
+
+    # res = OngLogIndex.search(
+    #     "weight world",
+    #     weights={"title": 2.0},
+    #     with_score=True,
+    #     score_alias="score").execute() # order_by(OngLogIndex.score.desc()).limit(10).execute()
+
+    # things = {x.title: x.score for x in res}
+    # print(things)
+    # subq = OngLogIndex.search(
+    #     "weight world",
+    #     weights={"title": 2.0},
+    #     with_score=True,
+    #     score_alias="score").alias("subq")
+
+    # x = OngLog.select(subq.c.rowid, subq.c.score, subq.c.title).execute()
+    # for row in x:
+    #     print(row.rowid, row.score, row.title)
+
+    # Check if the onglog_tmp file is older than 8 hours
+    if onglog_tmp.exists():
+        file_age = datetime.now() - datetime.fromtimestamp(onglog_tmp.stat().st_mtime)
+        log(f"INFO: The onglog_tmp file is {file_age.total_seconds() / 3600:.1f} hours old.")
+
+        if file_age > timedelta(hours=8) or args.force_fetch:
+            log("INFO: Fetching a fresh copy of the onglog...")
+            dl = gc.export(file_id=ONG_SPREADSHEET_ID, format=gspread.utils.ExportFormat.EXCEL)
+            onglog_tmp.write_bytes(dl)
+            log(f"INFO: Saved onglog as {onglog_tmp}")
+        else:
+            log(f"INFO: Using existing onglog copy at {onglog_tmp}")
+    else:
+        log("INFO: Fetching an initial copy of the onglog...")
         dl = gc.export(file_id=ONG_SPREADSHEET_ID, format=gspread.utils.ExportFormat.EXCEL)
         onglog_tmp.write_bytes(dl)
-        log(f"Saved onglog backup as {onglog_tmp}")
-    else:
-        log(f"Using existing onglog backup at {onglog_tmp}")
+        log(f"INFO: Saved onglog as {onglog_tmp}")
 
-    init_db_session()
 
     # By saying no header, it means we can keep the onglong row number equal
     # to the pd row number + 1
     df = pd.read_excel(onglog_tmp, header=None, sheet_name="Songs", names=["Date", "Uptime", "Order", "Requester", "Title", "Genre", "Type", "Links", "Looper", "FileNum"])
 
     last_processed_row = get_onglog_meta("last_processed_row")
+
     resume_row = 0
     if last_processed_row:
         start_row_num = int(last_processed_row) - 200 - 1
@@ -204,77 +260,77 @@ def main(argv: List[str]) -> int:
     eastern = ZoneInfo("America/New_York")
     sydney = ZoneInfo("Australia/Sydney")
 
+    db = get_db()
+
     # Adjust the loop to start from the identified row
     df_subset = df.iloc[start_index:]
-    for index, row in df_subset.iterrows():
-        assert isinstance(index, int)
 
-        if index >= resume_row:
-            log(f"Processing row {index + 1}: {row.Title} ({row.Order})")
+    with db.atomic():
+        for index, row in df_subset.iterrows():
+            assert isinstance(index, int)
 
-        if not pd.notna(row['Date']):
-            continue
+            if index >= resume_row:
+                log(f"Processing row {index + 1}: {row.Title} ({row.Order})")
 
-        if row['Order'] == "-" or int(row['Order']) == 0:
-            continue
-
-        if not row['Date'] or row['Date'] == "-":
-            continue
-
-        # Convert start_time to Sydney time
-        start_time_eastern = dateparser.parse(str(row['Date']))
-        if start_time_eastern:
-            start_time_eastern = start_time_eastern.replace(tzinfo=eastern)
-            start_time = start_time_eastern.astimezone(sydney)
-        else:
-            start_time = None
-
-        # Determine end_time based on the next row
-        if index + 1 < len(df):
-            next_row = df.iloc[index + 1]
-            if next_row['Order'] == 0:  # Start of a new stream
-                end_time = start_time + timedelta(hours=2) if start_time else None
-            elif next_row['Date'] == "-":  # hopefully rare corner case
+            if not pd.notna(row['Date']):
                 continue
+
+            if row['Order'] == "-" or int(row['Order']) == 0:
+                continue
+
+            if not row['Date'] or row['Date'] == "-":
+                continue
+
+            # Convert start_time to Sydney time
+            start_time_eastern = dateparser.parse(str(row['Date']))
+            if start_time_eastern:
+                start_time_eastern = start_time_eastern.replace(tzinfo=eastern)
+                start_time = start_time_eastern.astimezone(sydney)
             else:
-                end_time_eastern = dateparser.parse(str(next_row['Date']))
-                if end_time_eastern:
-                    end_time_eastern = end_time_eastern.replace(tzinfo=eastern)
-                    end_time = end_time_eastern.astimezone(sydney)
+                start_time = None
+
+            # Determine end_time based on the next row
+            if index + 1 < len(df):
+                next_row = df.iloc[index + 1]
+                if next_row['Order'] == 0:  # Start of a new stream
+                    end_time = start_time + timedelta(hours=2) if start_time else None
+                elif next_row['Date'] == "-":  # hopefully rare corner case
+                    continue
                 else:
-                    end_time = None
-        else:  # Last row in the dataframe
-            end_time = start_time + timedelta(hours=2) if start_time else None
+                    end_time_eastern = dateparser.parse(str(next_row['Date']))
+                    if end_time_eastern:
+                        end_time_eastern = end_time_eastern.replace(tzinfo=eastern)
+                        end_time = end_time_eastern.astimezone(sydney)
+                    else:
+                        end_time = None
+            else:  # Last row in the dataframe
+                end_time = start_time + timedelta(hours=2) if start_time else None
 
-        try:
-            uptime = hms_to_sec(str(row['Uptime']))
-        except ValueError:
-            uptime = None
+            try:
+                uptime = hms_to_sec(str(row['Uptime']))
+            except ValueError:
+                uptime = None
 
-        onglog_entry = OngLog(
-            onglog_line_number=index + 1,
-            start_time=start_time,
-            end_time=end_time,
-            stream_uptime=uptime,
-            requester=row['Requester'] if pd.notna(row['Requester']) else None,
-            title=row['Title'],
-            genre=row['Genre'] if pd.notna(row['Genre']) else None,
-            request_type=row['Type'] if pd.notna(row['Type']) else None,
-            looper_slot=row['Looper'] if pd.notna(row['Looper']) else None,
-            looper_file_number=row['FileNum'] if pd.notna(row['FileNum']) else None
-        )
+            onglog_entry = OngLog.replace(
+                rowid=index + 1,
+                start_time=start_time,
+                end_time=end_time,
+                stream_uptime=uptime,
+                requester=row['Requester'] if pd.notna(row['Requester']) else None,
+                title=row['Title'],
+                genre=row['Genre'] if pd.notna(row['Genre']) else None,
+                request_type=row['Type'] if pd.notna(row['Type']) else None,
+                looper_slot=row['Looper'] if pd.notna(row['Looper']) else None,
+                looper_file_number=row['FileNum'] if pd.notna(row['FileNum']) else None
+            )
+            onglog_entry.execute()
 
-        try:
-            session.add(onglog_entry)
-            session.commit()
-        except sqlalchemy.exc.IntegrityError:
-            session.rollback()
-            existing_entry = session.query(OngLog).filter_by(onglog_line_number=onglog_entry.onglog_line_number).first()
-            if existing_entry:
-                session.delete(existing_entry)
-                session.flush()
-            session.add(onglog_entry)
-            session.commit()
+            onglog_index_entry = OngLogIndex.replace(
+                rowid=index + 1,
+                title=row['Title']
+            )
+            onglog_index_entry.execute()
+
 
     set_onglog_meta("last_processed_row", str(index + 1))
 
@@ -288,38 +344,5 @@ if __name__ == "__main__":
     sys.stderr = io.TextIOWrapper(sys.stderr.detach(), encoding="utf-8")
 
     main(sys.argv)
-
-#     import pandas as pd
-
-#     def read_xlsx_and_insert_to_db(xlsx_file):
-#         # Read the xlsx file
-#         df = pd.read_excel(xlsx_file)
-
-#         # Iterate over the rows in the dataframe and insert them into the database
-#         for index, row in df.iterrows():
-#             add_onglog_entry(
-#                 onglog_line_number=row['onglog_line_number'],
-#                 start_time=row['start_time'],
-#                 end_time=row['end_time'],
-#                 uptime=row['uptime'],
-#                 requester=row['requester'],
-#                 title=row['title'],
-#                 genre=row['genre'],
-#                 request_type=row['request_type'],
-#                 looper_slot=row['looper_slot'],
-#                 looper_file_number=row['looper_file_number']
-#             )
-
-#     # Example usage
-#     xlsx_file = 'onglog_2024-09-28.xlsx'
-#     read_xlsx_and_insert_to_db(xlsx_file)
-
-# import pytz
-
-# eastern = pytz.timezone('US/Eastern')
-# sydney = pytz.timezone('Australia/Sydney')
-
-# def convert_to_sydney_time(eastern_time):
-#     eastern_time = eastern.localize(eastern_time)
-#     sydney_time = eastern_time.astimezone(sydney)
-#     return sydney_time
+else:
+    initialize_db()
