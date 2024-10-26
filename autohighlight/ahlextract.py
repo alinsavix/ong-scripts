@@ -274,7 +274,7 @@ def main():
                 log(f"DEBUG: found onglog entry: {ppretty(logentry)}")
             output_meta["title"] = logentry.title
             output_meta["requester"] = logentry.requester
-            output_meta["onglog_line"] = logentry.onglog_line_number
+            output_meta["onglog_line"] = logentry.rowid
         else:
             log(f"WARNING: Couldn't find onglog entry for {request_time}")
 
