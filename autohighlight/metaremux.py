@@ -474,7 +474,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--keep-original",
         action="store_false",
-        default=True,
+        default=False,
         help="Keep original video file",
     )
 
