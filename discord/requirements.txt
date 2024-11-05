@@ -1,4 +1,4 @@
 py-cord
 tdvutil
 toml
-sqlalchemy
+peewee
