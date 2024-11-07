@@ -22,19 +22,8 @@ from tdvutil.argparse import CheckFile
 
 import discord
 
+MATCH_LIMIT = 10
 # aiosqlite
-
-
-# things we need to keep:
-# oncode message id
-# ongcode date
-# ongcode edit date
-# title message id
-# title author
-# title
-# title date
-# title edit date
-
 
 class OngCode(Model):
     mainmsg_id = BigIntegerField(primary_key=True, null=False)
@@ -64,16 +53,18 @@ class OngCodeMeta(Model):
 
 _db: SqliteExtDatabase
 _db_initialized = False
-def initialize_db():
+def initialize_db(dbfile: Path):
     global _db_initialized
     if _db_initialized:
         return
 
-    onglog_db_file = Path(__file__).parent / 'ongcode.db'
+    # onglog_db_file = Path(__file__).parent / 'ongcode.db'
+
+    log(f"INFO: Using database file {dbfile}")
 
     global _db
     _db = SqliteExtDatabase(None)
-    _db.init(onglog_db_file, pragmas={"journal_mode": "wal", "cache_size": -1 * 64 * 1024})
+    _db.init(dbfile, pragmas={"journal_mode": "wal", "cache_size": -1 * 64 * 1024})
     _db.bind([OngCode, OngCodeIndex, OngCodeMeta])
     _db.connect()
     _db.create_tables([OngCode, OngCodeIndex, OngCodeMeta])
@@ -81,11 +72,11 @@ def initialize_db():
     _db_initialized = True
 
 
-def get_db():
-    initialize_db()
+# def get_db():
+#     initialize_db()
 
-    global _db
-    return _db
+#     global _db
+#     return _db
 
 
 def set_ongcode_meta(key: str, value: str):
@@ -127,58 +118,6 @@ def now() -> int:
     return int(time.time())
 
 
-def get_credentials(cfgfile: Path, environment: str) -> str:
-    log(f"loading config from {cfgfile}")
-    config = toml.load(cfgfile)
-
-    try:
-        return config["ongcode_bot"][environment]
-    except KeyError:
-        log(f"ERROR: no configuration for ongcode_bot.{environment} in credentials file")
-        sys.exit(1)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Share to discord some of the changes ojbpm has detected")
-
-    parser.add_argument(
-        "--credentials-file", "-c",
-        type=Path,
-        default=None,
-        action=CheckFile(must_exist=True),
-        help="file with discord credentials"
-    )
-
-    parser.add_argument(
-        "--environment", "--env",
-        type=str,
-        default="test",
-        help="environment to use"
-    )
-
-    parser.add_argument(
-        "--ongcode-server",
-        type=str,
-        default="WWP",
-        help="Server to use for finding ongcode"
-    )
-
-    parser.add_argument(
-        "--ongcode-channel",
-        type=str,
-        default="testing-private",
-        help="channel to use for finding ongcode"
-    )
-
-    parsed_args = parser.parse_args()
-
-    if parsed_args.credentials_file is None:
-        parsed_args.credentials_file = Path(__file__).parent / "credentials.toml"
-
-    return parsed_args
-
-
 id_start_re = re.compile(r"^\s*\^+\s*")
 id_end_re = re.compile(r"\s*\^+\s*$")
 
@@ -218,7 +157,7 @@ class OngcodeBot(discord.Bot):
         log(f"{self.user} (id {self.user.id}) is online")
 
         log(f"finding channel #{self.botargs.ongcode_channel}")
-        channel = discord.utils.get(self.get_all_channels(), guild__name=self.botargs.ongcode_server, name=self.botargs.ongcode_channel)
+        channel = discord.utils.get(self.get_all_channels(), guild__name=self.botargs.ongcode_guild, name=self.botargs.ongcode_channel)
 
         if channel is None:
             log(f"ERROR: channel #{self.botargs.ongcode_channel} not found, can't reasonably continue")
@@ -339,19 +278,98 @@ class OngcodeBot(discord.Bot):
         log(f"INFO: saved probable ongcode message with id {msg.id}")
 
 
+def get_credentials(cfgfile: Path, environment: str) -> Dict[str, str]:
+    log(f"loading config from {cfgfile}")
+    config = toml.load(cfgfile)
+
+    try:
+        return config["ongcode_bot"][environment]
+    except KeyError:
+        log(f"ERROR: no configuration for ongcode_bot.{environment} in credentials file")
+        sys.exit(1)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Share to discord some of the changes ojbpm has detected")
+
+    parser.add_argument(
+        "--credentials-file", "-c",
+        type=Path,
+        default=None,
+        action=CheckFile(must_exist=True),
+        help="file with discord credentials"
+    )
+
+    parser.add_argument(
+        "--environment", "--env",
+        type=str,
+        default="test",
+        help="environment to use"
+    )
+
+    parser.add_argument(
+        "--ongcode-guild",
+        type=str,
+        default=None,
+        help="Discord guild (server) to use for finding ongcode"
+    )
+
+    parser.add_argument(
+        "--ongcode-channel",
+        type=str,
+        default=None,
+        help="channel to use for finding ongcode"
+    )
+
+    parser.add_argument(
+        "--dbfile",
+        type=Path,
+        default=None,
+        help="database file to use"
+    )
+
+    parsed_args = parser.parse_args()
+
+    if parsed_args.credentials_file is None:
+        parsed_args.credentials_file = Path(__file__).parent / "credentials.toml"
+
+    return parsed_args
+
+
 def main():
     sys.stdout = io.TextIOWrapper(sys.stdout.detach(), encoding="utf-8", line_buffering=True)
     sys.stderr = io.TextIOWrapper(sys.stderr.detach(), encoding="utf-8", line_buffering=True)
 
     args = parse_args()
     creds = get_credentials(args.credentials_file, args.environment)
-    # print(creds)
 
-    initialize_db()
+    if args.ongcode_guild is None:
+        args.ongcode_guild = creds.get("guild", None)
+
+    if args.ongcode_guild is None:
+        log(f"ERROR: No guild specified and no guild in configuration")
+        sys.exit(1)
+
+    if args.ongcode_channel is None:
+        args.ongcode_channel = creds.get("channel", None)
+
+    if args.ongcode_channel is None:
+        log(f"ERROR: No channel specified and no channel in configuration")
+        sys.exit(1)
+
+    if args.dbfile is None:
+        args.dbfile = Path(__file__).parent / f"ongcode_{args.environment}.db"
+
+    log("INFO: In startup")
+    log(f"INFO: Using guild '{args.ongcode_guild}'")
+    log(f"INFO: Using channel '{args.ongcode_channel}'")
+
+    initialize_db(args.dbfile)
 
     # See if we have a record for the last
     if not get_ongcode_meta("last_nonid_msg_date"):
-        lnm_date = datetime.datetime(2020, 1, 1, 0, 0, 0)  # before ongcode
+        lnm_date = datetime.datetime(2016, 1, 1, 0, 0, 0)  # before ongcode
         set_ongcode_meta("last_nonid_msg_date", str(lnm_date))
         set_ongcode_meta("last_nonid_msg_id", str(0))
 
@@ -387,8 +405,8 @@ def main():
             await ctx.respond(embed=embed, ephemeral=True)
             return
 
-        if len(x) >= 10:
-            shown = f" (10 of {len(x)} shown)"
+        if len(x) >= MATCH_LIMIT:
+            shown = f" ({MATCH_LIMIT} of {len(x)} shown)"
         else:
             shown = ""
 
@@ -400,7 +418,7 @@ def main():
 
         response = ""
         for i, row in enumerate(x):
-            if i >= 10:
+            if i >= MATCH_LIMIT:
                 break
 
             msg_url = f"https://discord.com/channels/{bot_guild.id}/{bot_channel.id}/{row.rowid}"
