@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import toml
+from more_itertools import ichunked
 from peewee import (SQL, AutoField, BigIntegerField, CharField, DateTimeField,
                     FloatField, IntegerField, Model, SqliteDatabase, TextField)
 from playhouse.sqlite_ext import (FTS5Model, RowIDField, SearchField,
@@ -21,6 +22,7 @@ from tdvutil import ppretty
 from tdvutil.argparse import CheckFile
 
 import discord
+from discord.ext import pages
 
 MATCH_LIMIT = 10
 # aiosqlite
@@ -96,19 +98,6 @@ def get_ongcode_meta(key: str) -> Optional[str]:
     return None
 
 
-# class OngLogIndex(FTS5Model):
-#     rowid = RowIDField()
-#     title = SearchField()
-
-#     class Meta:
-#         options = {"tokenize": "unicode61"}
-
-
-# class OngLogMeta(Model):
-#     key = CharField(primary_key=True)
-#     value = CharField()
-
-
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
     sys.stderr.flush()
@@ -152,6 +141,7 @@ class OngcodeBot(discord.Bot):
 
         super().__init__(intents=intents)   # , status=discord.Status.invisible)
 
+
     async def on_ready(self):
         # print(ppretty(self))
         log(f"{self.user} (id {self.user.id}) is online")
@@ -174,6 +164,7 @@ class OngcodeBot(discord.Bot):
         await self.message_catchup()
         sys.stdout.flush()
 
+
     async def on_message(self, message: discord.Message):
         if message.channel.id != self.botchannel.id:
             return
@@ -185,21 +176,18 @@ class OngcodeBot(discord.Bot):
             return
 
         log(f"message from {message.author}: {message.content}")
-        log(message)
-        # self.process_message(message)
+        self.process_message(message)
+
 
     async def message_catchup(self) -> None:
         log("catching up on messages...")
         log(f"Last recorded non-identifying message: {self.last_nonid_msg_date} (id {self.last_nonid_msg_id})")
-        # , before=datetime_now):
 
         total_count = 0
         while True:
-            # after_fudged = self.last_nonid_msg_date + datetime.timedelta(seconds=0.5)
             count = 0
 
             async for h in self.botchannel.history(after=self.last_nonid_msg_date, limit=50, oldest_first=True):
-                # print(ppretty(h))
                 self.process_message(h)
                 count += 1
 
@@ -382,19 +370,26 @@ def main():
     @bot.slash_command(name="ongcode", description="Search for ongcode")
     async def cmd_find_ongcode(
         ctx: discord.ApplicationContext,
-        title: discord.Option(str, "Partial song title")
+        title: discord.Option(str, "Partial song title"),
     ):
-
+        await ctx.trigger_typing()
+        await asyncio.sleep(1)
         log(f"SEARCH: '{title}'")
-        x = OngCodeIndex.search(
-            title,
-            with_score=True,
-            score_alias="score").join(OngCode, on=(OngCodeIndex.rowid == OngCode.mainmsg_id)).execute()
+
+        # this query was SO incredibly painful to figure out. Hint: You can't
+        # use OngCodeIndex.search() here, even though the docs for peewee's
+        # FTS5Model only list .search() as a class method. That's effectively
+        # an entire query unto itself, though, so we have to use match() and
+        # do the ranking ourselves
+        x = (OngCode
+            .select(OngCode, OngCodeIndex.rank().alias("score"))
+            .join(OngCodeIndex, on=(OngCode.mainmsg_id == OngCodeIndex.rowid))
+            .where(OngCodeIndex.match(title))
+            .order_by(OngCodeIndex.rank())
+        )
 
         log(f"SEARCH RESULT COUNT: {len(x)}")
 
-        # print(f"guild: {bot_guild.id}")
-        # sys.stdout.flush()
         if len(x) == 0:
             embed = discord.Embed(
                 title="Ongcode Search",
@@ -405,38 +400,36 @@ def main():
             await ctx.respond(embed=embed, ephemeral=True)
             return
 
-        if len(x) >= MATCH_LIMIT:
-            shown = f" ({MATCH_LIMIT} of {len(x)} shown)"
-        else:
-            shown = ""
+        pagelist = []
 
-        embed = discord.Embed(
-            title="Ongcode Search",
-            description=f"Top matches{shown}:",
-            color=discord.Color.green()
-        )
+        for i, chunk in enumerate(ichunked(x, MATCH_LIMIT)):
+            # embed = discord.Embed(
+            #     title=f"Ongcode Search Results (page {i+1} of {(len(x) // MATCH_LIMIT) + 1})",
+            #     # description=f"Top matches{shown}:",
+            #     color=discord.Color.green()
+            # )
 
-        response = ""
-        for i, row in enumerate(x):
-            if i >= MATCH_LIMIT:
-                break
+            response_all = f"### Ongcode Search Results (page {i+1} of {(len(x) // MATCH_LIMIT) + 1})\n"
+            for i, row in enumerate(chunk):
+                rowdate = datetime.datetime.fromisoformat(str(row.mainmsg_date)).date()
 
-            msg_url = f"https://discord.com/channels/{bot_guild.id}/{bot_channel.id}/{row.rowid}"
-            response = f"{msg_url} - {row.title} (score: {abs(row.score):.2f})\n"
-            # response = f"|{abs(row.score):.2f} - {row.title}\n"
+                msg_url = f"https://discord.com/channels/{bot_guild.id}/{bot_channel.id}/{row.mainmsg_id}"
+                response = f"{msg_url} - `{rowdate}` - {row.titlemsg_text} (score: {abs(row.score):.2f})\n"
+                # response = f"|{abs(row.score):.2f} - {row.title}\n"
+                response_all += response
+                # embed.add_field(
+                #     name="",
+                #     # value="A really nice field with some information. Provided by [Pycord](https://pycord.dev/)\nmeow1\nmeow2",
+                #     value=response,
+                #     inline=False
+                # )
 
-            embed.add_field(
-                name="",
-                # value="A really nice field with some information. Provided by [Pycord](https://pycord.dev/)\nmeow1\nmeow2",
-                value=response,
-                inline=False
+            # pagelist.append(
+            #     pages.Page(embeds=[embed])
+            # )
+            pagelist.append(
+                pages.Page(content=response_all)
             )
-            # embed.add_field(name="",
-            #                 # value="A really nice field with some information. Provided by [Pycord](https://pycord.dev/)\nmeow1\nmeow2",
-            #                 value=msg_url,
-            #                 inline=True
-            #                 )
-
         # embed.add_field(name="Inline Field 1", value="Inline Field 1", inline=True)
         # embed.add_field(name="Inline Field 2", value="Inline Field 2", inline=True)
         # embed.add_field(name="Inline Field 3", value="Inline Field 3", inline=True)
@@ -446,11 +439,19 @@ def main():
         # embed.set_thumbnail(url="https://example.com/link-to-my-thumbnail.png")
         # embed.set_image(url="https://example.com/link-to-my-banner.png")
 
-        # Send the embed with some text
-        await ctx.respond(embed=embed, ephemeral=True)
-        # await ctx.respond("Hey!")
-        # print(ppretty(ctx))
+        # Send the response
+        paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, timeout=600)
+        await paginator.respond(ctx.interaction, ephemeral=True)
+        # await ctx.respond(embed=embed, ephemeral=True)
+
         sys.stdout.flush()
+
+    @bot.slash_command(name="oc", description="Search for ongcode (alias for /ongcode)")
+    async def cmd_find_ongcode_alias(
+        ctx: discord.ApplicationContext,
+        title: discord.Option(str, "Partial song title")
+    ):
+        await cmd_find_ongcode(ctx, title)
 
     bot.run(creds["token"])
 

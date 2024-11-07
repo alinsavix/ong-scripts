@@ -2,3 +2,7 @@ py-cord
 tdvutil
 toml
 peewee
+more-itertools
+mypy
+types-peewee
+types-toml
