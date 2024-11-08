@@ -112,6 +112,7 @@ id_end_re = re.compile(r"\s*\^+\s*$")
 
 bot_guild = None
 bot_channel = None
+mod_rolename = None
 
 # make sure to also read https://guide.pycord.dev/getting-started/more-features
 class OngcodeBot(discord.Bot):
@@ -220,14 +221,13 @@ class OngcodeBot(discord.Bot):
 
     def process_id_message(self, msg: discord.Message) -> None:
         if not self.last_nonid_msg_id:
-            log(f"WARNING: Message looks like a song title, but no previous unknonw ongcode")
+            log("WARNING: Message looks like a song title, but no previous unknonw ongcode")
             log(f"WARNING: Message: {msg.clean_content}")
             return
 
         ongcode = OngCode.get_or_none(OngCode.mainmsg_id == self.last_nonid_msg_id)
         if ongcode is None:
-            log(f"WARNING: Previous ongcode message id {
-                self.last_nonid_msg_id} doesn't exist in database!")
+            log(f"WARNING: Previous ongcode message id {self.last_nonid_msg_id} doesn't exist in database!")
             return
 
         ongcode.titlemsg_id = msg.id
@@ -242,8 +242,7 @@ class OngcodeBot(discord.Bot):
             title=ongcode.titlemsg_text
         )
 
-        log(f"INFO: saved ongcode identifier '{
-            ongcode.titlemsg_text}' for ongcode message {ongcode.mainmsg_id}")
+        log(f"INFO: saved ongcode identifier '{ongcode.titlemsg_text}' for ongcode message {ongcode.mainmsg_id}")
 
         # reset so that we don't process the same ongcode message twice
         # We'll keep the date, though, so that we know where to continue
@@ -255,7 +254,7 @@ class OngcodeBot(discord.Bot):
     # FIXME: Might need further verification of some type
     def process_ongcode_message(self, msg: discord.Message) -> None:
         if len(msg.clean_content) < 50:
-            log(f"WARNING: Message is probably too short to be ongcode")
+            log("WARNING: Message is probably too short to be ongcode")
             log(f"WARNING: Message: {msg.clean_content}")
             return
 
@@ -316,6 +315,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--moderator-role",
+        type=str,
+        default=None,
+        help="role name for moderators"
+    )
+
+    parser.add_argument(
         "--dbfile",
         type=Path,
         default=None,
@@ -341,15 +347,18 @@ def main():
         args.ongcode_guild = creds.get("guild", None)
 
     if args.ongcode_guild is None:
-        log(f"ERROR: No guild specified and no guild in configuration")
+        log("ERROR: No guild specified and no guild in configuration")
         sys.exit(1)
 
     if args.ongcode_channel is None:
         args.ongcode_channel = creds.get("channel", None)
 
     if args.ongcode_channel is None:
-        log(f"ERROR: No channel specified and no channel in configuration")
+        log("ERROR: No channel specified and no channel in configuration")
         sys.exit(1)
+
+    if args.moderator_role is None:
+        args.moderator_role = creds.get("moderator_role", None)
 
     if args.dbfile is None:
         args.dbfile = Path(__file__).parent / f"ongcode_{args.environment}.db"
@@ -372,6 +381,7 @@ def main():
     # async def cmd_ping(ctx):
     #     await ctx.respond(f"Pong! Latency is {bot.latency * 1000:.1f}ms")
 
+    @discord.ext.commands.has_role(args.moderator_role)
     @bot.slash_command(name="ongcode", description="Search for ongcode")
     async def cmd_find_ongcode(
         ctx: discord.ApplicationContext,
@@ -386,7 +396,8 @@ def main():
         # FTS5Model only list .search() as a class method. That's effectively
         # an entire query unto itself, though, so we have to use match() and
         # do the ranking ourselves
-        x = (OngCode
+        x = (
+            OngCode
             .select(OngCode, OngCodeIndex.rank().alias("score"))
             .join(OngCodeIndex, on=(OngCode.mainmsg_id == OngCodeIndex.rowid))
             .where(OngCodeIndex.match(title))
@@ -415,7 +426,7 @@ def main():
             # )
 
             response_all = f"### Ongcode Search Results (page {i+1} of {(len(x) // MATCH_LIMIT) + 1})\n"
-            for i, row in enumerate(chunk):
+            for row in chunk:
                 rowdate = datetime.datetime.fromisoformat(str(row.mainmsg_date)).date()
 
                 msg_url = f"https://discord.com/channels/{bot_guild.id}/{bot_channel.id}/{row.mainmsg_id}"
@@ -451,6 +462,12 @@ def main():
 
         sys.stdout.flush()
 
+    @cmd_find_ongcode.error
+    async def cmd_find_ongcode_error(ctx: discord.ApplicationContext, error: discord.DiscordException):
+        if isinstance(error, discord.ext.commands.MissingRole):
+            await ctx.respond("Permission denied", ephemeral=True)
+
+    @discord.ext.commands.has_role(args.moderator_role)
     @bot.slash_command(name="oc", description="Search for ongcode (alias for /ongcode)")
     async def cmd_find_ongcode_alias(
         ctx: discord.ApplicationContext,
@@ -458,7 +475,43 @@ def main():
     ):
         await cmd_find_ongcode(ctx, title)
 
+    @cmd_find_ongcode_alias.error
+    async def cmd_find_ongcode_alias_error(ctx: discord.ApplicationContext, error: discord.DiscordException):
+        if isinstance(error, discord.ext.commands.MissingRole):
+            await ctx.respond("Permission denied", ephemeral=True)
+
+    # A couple of testing things
+    class MyModal(discord.ui.Modal):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+
+            self.add_item(discord.ui.InputText(label="Short Input"))
+            self.add_item(discord.ui.InputText(
+                label="Long Input", style=discord.InputTextStyle.long))
+
+        async def callback(self, interaction: discord.Interaction):
+            embed = discord.Embed(title="Modal Results")
+            embed.add_field(name="Short Input", value=self.children[0].value)
+            embed.add_field(name="Long Input", value=self.children[1].value)
+            await interaction.response.send_message(embeds=[embed])
+
+    class MyView(discord.ui.View):
+        @discord.ui.button(label="Send Modal")
+        async def button_callback(self, button, interaction):
+            await interaction.response.send_modal(MyModal(title="Modal via Button"))
+
+    # @bot.slash_command()
+    # async def send_modal(ctx):
+    #     await ctx.respond(view=MyView())
+
+    # creates a global message command. use guild_ids=[] to create guild-specific commands.
+    # @bot.message_command(name="interaction_test")
+    async def interaction_test(ctx, message: discord.Message):  # message commands return the message
+        await ctx.respond(view=MyView())
+
+
     bot.run(creds["token"])
+
 
 if __name__ == "__main__":
     main()
