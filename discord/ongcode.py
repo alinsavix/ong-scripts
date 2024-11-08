@@ -207,7 +207,12 @@ class OngcodeBot(discord.Bot):
         self.last_nonid_msg_date = msg.created_at
         set_ongcode_meta("last_nonid_msg_date", str(self.last_nonid_msg_date))
 
+        maybestr = ""
         if id_start_re.search(msg.clean_content) or id_end_re.search(msg.clean_content):
+            # make sure there's something left after stripping everything out
+            maybestr = re.sub(r"(\s|\^|\n|@\S+)+", "", msg.clean_content)
+
+        if maybestr and "@JonathanOng" not in msg.clean_content:
             self.process_id_message(msg)
         else:
             self.process_ongcode_message(msg)
@@ -372,8 +377,8 @@ def main():
         ctx: discord.ApplicationContext,
         title: discord.Option(str, "Partial song title"),
     ):
-        await ctx.trigger_typing()
-        await asyncio.sleep(1)
+        # await ctx.trigger_typing()
+        # await asyncio.sleep(1)
         log(f"SEARCH: '{title}'")
 
         # this query was SO incredibly painful to figure out. Hint: You can't
