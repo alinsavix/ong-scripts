@@ -39,18 +39,22 @@ class OngCode(Model):
     titlemsg_text = TextField(null=True)
 
     class Meta:
-        table_name = 'ongcode'
+        table_name = "ongcode"
 
 class OngCodeIndex(FTS5Model):
     rowid = RowIDField()
     title = SearchField()
 
     class Meta:
+        table_name = "ongcodeindex"
         options = {"tokenize": "unicode61"}
 
 class OngCodeMeta(Model):
     key = CharField(primary_key=True)
     value = CharField()
+
+    class Meta:
+        table_name = "ongcodemeta"
 
 
 _db: SqliteExtDatabase
@@ -59,8 +63,6 @@ def initialize_db(dbfile: Path):
     global _db_initialized
     if _db_initialized:
         return
-
-    # onglog_db_file = Path(__file__).parent / 'ongcode.db'
 
     log(f"INFO: Using database file {dbfile}")
 
@@ -72,13 +74,6 @@ def initialize_db(dbfile: Path):
     _db.create_tables([OngCode, OngCodeIndex, OngCodeMeta])
 
     _db_initialized = True
-
-
-# def get_db():
-#     initialize_db()
-
-#     global _db
-#     return _db
 
 
 def set_ongcode_meta(key: str, value: str):
@@ -176,7 +171,7 @@ class OngcodeBot(discord.Bot):
         if not self.caught_up:
             return
 
-        log(f"message from {message.author}: {message.content}")
+        log(f"INFO: message from {message.author.nick}: {message.content}")
         self.process_message(message)
 
 
@@ -204,6 +199,7 @@ class OngcodeBot(discord.Bot):
 
 
     def process_message(self, msg: discord.Message) -> None:
+        # log(ppretty(msg))
         # Make sure we update the last processed timestamp appropriately
         self.last_nonid_msg_date = msg.created_at
         set_ongcode_meta("last_nonid_msg_date", str(self.last_nonid_msg_date))
@@ -220,14 +216,19 @@ class OngcodeBot(discord.Bot):
 
 
     def process_id_message(self, msg: discord.Message) -> None:
-        if not self.last_nonid_msg_id:
-            log("WARNING: Message looks like a song title, but no previous unknonw ongcode")
-            log(f"WARNING: Message: {msg.clean_content}")
-            return
+        if msg.type == discord.MessageType.reply:
+            parentmsg = msg.reference.message_id
+        else:
+            if not self.last_nonid_msg_id:
+                log("WARNING: Message looks like a song title, but no previous unknonw ongcode")
+                log(f"WARNING: Message: {msg.clean_content}")
+                return
+            else:
+                parentmsg = self.last_nonid_msg_id
 
-        ongcode = OngCode.get_or_none(OngCode.mainmsg_id == self.last_nonid_msg_id)
+        ongcode = OngCode.get_or_none(OngCode.mainmsg_id == parentmsg)
         if ongcode is None:
-            log(f"WARNING: Previous ongcode message id {self.last_nonid_msg_id} doesn't exist in database!")
+            log(f"WARNING: Previous ongcode message id {parentmsg} doesn't exist in database!")
             return
 
         ongcode.titlemsg_id = msg.id
@@ -237,18 +238,24 @@ class OngcodeBot(discord.Bot):
         ongcode.titlemsg_text = id_start_re.sub("", id_end_re.sub("", msg.clean_content))
         ongcode.save()
 
-        OngCodeIndex.create(
-            rowid=ongcode.mainmsg_id,
-            title=ongcode.titlemsg_text
-        )
+        idx = OngCodeIndex.get_or_none(OngCodeIndex.rowid == ongcode.mainmsg_id)
+        if idx is not None:
+            idx.title = ongcode.titlemsg_text
+            idx.save()
+        else:
+            OngCodeIndex.create(
+                rowid=ongcode.mainmsg_id,
+                title=ongcode.titlemsg_text
+            )
 
         log(f"INFO: saved ongcode identifier '{ongcode.titlemsg_text}' for ongcode message {ongcode.mainmsg_id}")
 
         # reset so that we don't process the same ongcode message twice
         # We'll keep the date, though, so that we know where to continue
         # from if we restart the bot
-        self.last_nonid_msg_id = 0
-        set_ongcode_meta("last_nonid_msg_id", str(self.last_nonid_msg_id))
+        if parentmsg == self.last_nonid_msg_id:
+            self.last_nonid_msg_id = 0
+            set_ongcode_meta("last_nonid_msg_id", str(self.last_nonid_msg_id))
 
 
     # FIXME: Might need further verification of some type
@@ -507,7 +514,8 @@ def main():
     # creates a global message command. use guild_ids=[] to create guild-specific commands.
     # @bot.message_command(name="interaction_test")
     async def interaction_test(ctx, message: discord.Message):  # message commands return the message
-        await ctx.respond(view=MyView())
+        modal = MyModal(title="Modal via Message Command")
+        await ctx.send_modal(modal)
 
 
     bot.run(creds["token"])
