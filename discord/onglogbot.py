@@ -15,7 +15,7 @@ import pandas as pd
 import toml
 from more_itertools import ichunked
 from peewee import (SQL, AutoField, CharField, DateTimeField, FloatField,
-                    IntegerField, Model, SqliteDatabase)
+                    ForeignKeyField, IntegerField, Model, SqliteDatabase)
 from playhouse.sqlite_ext import (FTS5Model, RowIDField, SearchField,
                                   SqliteExtDatabase)
 from tdvutil import hms_to_sec, ppretty
@@ -40,6 +40,21 @@ ONG_RANGE_NAME = f"Songs!A{EARLIEST_ROW}:I"
 MATCH_LIMIT = 10
 
 
+class OngLogTitle(Model):
+    rowid = AutoField()
+    title = CharField(null=False, index=True)
+
+    class Meta:
+        table_name = "onglog_title"
+
+class OngLogIndex(FTS5Model):
+    rowid = RowIDField()
+    title = SearchField()
+
+    class Meta:
+        table_name = "onglog_index"
+        options = {"tokenize": "unicode61"}
+
 class OngLog(Model):
     # __tablename__ = 'onglog'
     rowid = IntegerField(primary_key=True, null=False)
@@ -47,7 +62,7 @@ class OngLog(Model):
     end_time = DateTimeField(index=True, null=False)
     stream_uptime = FloatField(null=True)
     requester = CharField(null=True, index=True)
-    title = CharField(null=False)
+    titleid = IntegerField(null=False, index=True)
     genre = CharField(null=True)
     request_type = CharField(null=True)
     notes = CharField(null=True)
@@ -56,14 +71,6 @@ class OngLog(Model):
 
     class Meta:
         table_name = "onglog"
-
-class OngLogIndex(FTS5Model):
-    rowid = RowIDField()
-    title = SearchField()
-
-    class Meta:
-        options = {"tokenize": "unicode61"}
-
 
 class OngLogMeta(Model):
     key = CharField(primary_key=True)
@@ -82,10 +89,10 @@ def initialize_db(dbfile: Path):
 
     global _db
     _db = SqliteExtDatabase(None)
-    _db.init(dbfile, pragmas={"journal_mode": "wal", "cache_size": -1 * 64 * 1024})
-    _db.bind([OngLog, OngLogMeta, OngLogIndex])
+    _db.init(dbfile, pragmas={"journal_mode": "wal", "cache_size": -1 * 64 * 1024, "foreign_keys": 1})
+    _db.bind([OngLogTitle, OngLogIndex, OngLog, OngLogMeta])
     _db.connect()
-    _db.create_tables([OngLog, OngLogMeta, OngLogIndex])
+    _db.create_tables([OngLogTitle, OngLogIndex, OngLog, OngLogMeta])
 
     _db_initialized = True
 
@@ -124,6 +131,21 @@ def get_onglog_meta(key: str) -> Optional[str]:
     # else
     return None
 
+
+def get_title_id(title: str) -> int:
+    t = OngLogTitle.get_or_none(OngLogTitle.title == title)
+    if t:
+        return t.rowid
+
+    # else, gotta add it
+    t = OngLogTitle.create(title=title)
+    idx = OngLogIndex.replace(
+        rowid=t.rowid,
+        title=title
+    )
+    idx.execute()
+
+    return t.rowid
 
 # # Create a datetime object for Saturday, September 18, 2024 at 8:00 AM
 # target_datetime = datetime(2024, 9, 29, 2, 0)
@@ -261,20 +283,20 @@ def onglog_update(args: argparse.Namespace):
                 end_time=end_time,
                 stream_uptime=uptime,
                 requester=row['Requester'] if (pd.notna(row['Requester']) and row['Requester'] != "-") else None,
-                title=row['Title'],
+                titleid=get_title_id(row['Title']),
                 genre=row['Genre'] if pd.notna(row['Genre']) else None,
                 request_type=row['Type'] if pd.notna(row['Type']) else None,
-                notes=row['Links'] if (pd.notna(row['Links']) and "Highlight" not in row['Links']) else None,
+                notes=str(row['Links']) if (pd.notna(row['Links']) and "Highlight" not in str(row['Links'])) else None,
                 looper_slot=row['Looper'] if pd.notna(row['Looper']) else None,
                 looper_file_number=row['FileNum'] if pd.notna(row['FileNum']) else None
             )
             onglog_entry.execute()
 
-            onglog_index_entry = OngLogIndex.replace(
-                rowid=index + 1,
-                title=row['Title']
-            )
-            onglog_index_entry.execute()
+            # onglog_index_entry = OngLogIndex.replace(
+            #     rowid=index + 1,
+            #     title=row['Title']
+            # )
+            # onglog_index_entry.execute()
 
     set_onglog_meta("last_processed_row", str(index + 1))
 
@@ -388,6 +410,13 @@ def parse_args() -> argparse.Namespace:
         help="force fetching the onglog, even if ours is recent",
     )
 
+    parser.add_argument(
+        "--debug-queries",
+        default=False,
+        action="store_true",
+        help="print all queries to stderr",
+    )
+
     parsed_args = parser.parse_args()
 
     if parsed_args.credentials_file is None:
@@ -410,6 +439,13 @@ def main() -> int:
     sys.stderr = io.TextIOWrapper(sys.stderr.detach(), encoding="utf-8", line_buffering=True)
 
     args = parse_args()
+
+    if args.debug_queries:
+        import logging
+        logger = logging.getLogger('peewee')
+        logger.addHandler(logging.StreamHandler())
+        logger.setLevel(logging.DEBUG)
+
     creds = get_credentials(args.credentials_file, args.environment)
 
     if args.onglog_guild is None:
@@ -451,7 +487,8 @@ def main() -> int:
 
         x = (
             OngLog
-            .select(OngLog, OngLogIndex.rank().alias("score"))
+            .select(OngLog, OngLogIndex.rank().alias("score"), OngLogTitle)
+            .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
             .join(OngLogIndex, on=(OngLog.rowid == OngLogIndex.rowid))
             .where(OngLogIndex.match(title))
             .order_by(OngLogIndex.rank())
@@ -473,11 +510,13 @@ def main() -> int:
 
         for i, chunk in enumerate(ichunked(x, MATCH_LIMIT)):
             response_all = f"### Ongcode Search Results (page {i + 1} of {(len(x) // MATCH_LIMIT) + 1})\n"
+            # response_all += "**"
             for row in chunk:
+                # print(ppretty(row))
                 rowdate = datetime.fromisoformat(str(row.start_time)).date()
 
                 # msg_url = f"{ONG_SPREADSHEET_URL}?range=A{row.rowid}"
-                response = f"{row.rowid} - {rowdate} - {row.requester} - {row.title} (score: {abs(row.score):.2f})\n"
+                response = f"*`{row.rowid}`* - `{rowdate}` - {row.requester} - {row.onglogtitle.title} (score: {abs(row.score):.2f})\n"
 
                 response_all += response
 
