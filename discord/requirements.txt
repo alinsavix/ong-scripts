@@ -6,6 +6,10 @@ more-itertools
 mypy
 types-peewee
 types-toml
+dateparser
+gspread
+openpyxl
+pandas
 
 # our standard flake8 bits (...maybe we need a metapackage)
 flake8-async
