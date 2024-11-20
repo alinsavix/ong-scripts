@@ -15,7 +15,7 @@ import pandas as pd
 import toml
 from more_itertools import ichunked
 from peewee import (SQL, AutoField, CharField, DateTimeField, FloatField,
-                    ForeignKeyField, IntegerField, Model, SqliteDatabase)
+                    ForeignKeyField, IntegerField, Model, SqliteDatabase, fn)
 from playhouse.sqlite_ext import (FTS5Model, RowIDField, SearchField,
                                   SqliteExtDatabase)
 from tdvutil import hms_to_sec, ppretty
@@ -485,13 +485,22 @@ def main() -> int:
         # await asyncio.sleep(1)
         log(f"SEARCH: '{title}'")
 
+        # x = (
+        #     OngLog
+        #     .select(OngLog, OngLogIndex.rank().alias("score"), OngLogTitle)
+        #     .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
+        #     .join(OngLogIndex, on=(OngLog.rowid == OngLogIndex.rowid))
+        #     .where(OngLogIndex.match(title))
+        #     .order_by(OngLogIndex.rank())
+        # )
+
         x = (
-            OngLog
-            .select(OngLog, OngLogIndex.rank().alias("score"), OngLogTitle)
-            .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
-            .join(OngLogIndex, on=(OngLog.rowid == OngLogIndex.rowid))
+            OngLogIndex
+            .select(OngLog.titleid, OngLogIndex.title, OngLogIndex.rank().alias("score"), fn.DATE(fn.MAX(OngLog.start_time)).alias("last_played"))
+            .join(OngLog, on=(OngLogIndex.rowid == OngLog.titleid))
             .where(OngLogIndex.match(title))
             .order_by(OngLogIndex.rank())
+            .group_by(OngLog.titleid)
         )
 
         log(f"SEARCH RESULT COUNT: {len(x)}")
@@ -512,11 +521,11 @@ def main() -> int:
             response_all = f"### Ongcode Search Results (page {i + 1} of {(len(x) // MATCH_LIMIT) + 1})\n"
             # response_all += "**"
             for row in chunk:
-                # print(ppretty(row))
-                rowdate = datetime.fromisoformat(str(row.start_time)).date()
+                print(ppretty(row))
+                # rowdate = datetime.fromisoformat(str(row.start_time)).date()
 
                 # msg_url = f"{ONG_SPREADSHEET_URL}?range=A{row.rowid}"
-                response = f"*`{row.rowid}`* - `{rowdate}` - {row.requester} - {row.onglogtitle.title} (score: {abs(row.score):.2f})\n"
+                response = f"*`{row.onglog.titleid}`* - `{row.last_played}` - {row.title} (score: {abs(row.score):.2f})\n"
 
                 response_all += response
 
