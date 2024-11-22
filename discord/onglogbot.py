@@ -22,7 +22,8 @@ from tdvutil import hms_to_sec, ppretty
 from tdvutil.argparse import CheckFile
 
 import discord
-from discord.ext import pages
+from discord.commands import SlashCommandGroup
+from discord.ext import commands, pages
 
 # NOTE: You will need to set up a file with your google cloud credentials
 # as noted in the documentation for the "gspread" module
@@ -33,11 +34,12 @@ from discord.ext import pages
 ONG_SPREADSHEET_ID = "14ARzE_zSMNhp0ZQV34ti2741PbA-5wAjsXRAW8EgJ-4"
 ONG_SPREADSHEET_URL = f"https://docs.google.com/spreadsheets/d/{ONG_SPREADSHEET_ID}/edit"
 
-EARLIEST_ROW=767
+EARLIEST_ROW = 767
 # EARLIEST_ROW=12900
 ONG_RANGE_NAME = f"Songs!A{EARLIEST_ROW}:I"
 
 MATCH_LIMIT = 10
+
 
 
 class OngLogTitle(Model):
@@ -89,7 +91,8 @@ def initialize_db(dbfile: Path):
 
     global _db
     _db = SqliteExtDatabase(None)
-    _db.init(dbfile, pragmas={"journal_mode": "wal", "cache_size": -1 * 64 * 1024, "foreign_keys": 1})
+    _db.init(dbfile, pragmas={"journal_mode": "wal",
+             "cache_size": -1 * 64 * 1024, "foreign_keys": 1})
     _db.bind([OngLogTitle, OngLogIndex, OngLog, OngLogMeta])
     _db.connect()
     _db.create_tables([OngLogTitle, OngLogIndex, OngLog, OngLogMeta])
@@ -282,11 +285,13 @@ def onglog_update(args: argparse.Namespace):
                 start_time=start_time,
                 end_time=end_time,
                 stream_uptime=uptime,
-                requester=row['Requester'] if (pd.notna(row['Requester']) and row['Requester'] != "-") else None,
+                requester=row['Requester'] if (
+                    pd.notna(row['Requester']) and row['Requester'] != "-") else None,
                 titleid=get_title_id(row['Title']),
                 genre=row['Genre'] if pd.notna(row['Genre']) else None,
                 request_type=row['Type'] if pd.notna(row['Type']) else None,
-                notes=str(row['Links']) if (pd.notna(row['Links']) and "Highlight" not in str(row['Links'])) else None,
+                notes=str(row['Links']) if (pd.notna(row['Links'])
+                                            and "Highlight" not in str(row['Links'])) else None,
                 looper_slot=row['Looper'] if pd.notna(row['Looper']) else None,
                 looper_file_number=row['FileNum'] if pd.notna(row['FileNum']) else None
             )
@@ -350,6 +355,91 @@ class OnglogBot(discord.Bot):
         # sys.stdout.flush()
 
 
+class OnglogCommands(commands.Cog):
+    def __init__(self, bot: discord.Bot):
+        self.bot = bot
+
+    onglog_cmds = SlashCommandGroup("onglog", "onglog search & info commands")
+    title_cmds = onglog_cmds.create_subgroup("title", "song title commands")
+
+    @commands.slash_command()
+    async def sync(self, ctx):
+        print("sync command")
+        # if ctx.author.id == 540337738520723459:
+        #     await self.tree.sync()
+        #     await ctx.send('Command tree synced.')
+        # else:
+        #     await ctx.send('You must be the owner to use this command!')
+
+
+    @title_cmds.command(name="search", description="Search onglog for song title")
+    async def cmd_find_onglog(
+        self,
+        ctx: discord.ApplicationContext,
+        title: discord.Option(str, "Partial song title"),
+    ):
+        # await ctx.trigger_typing()
+        # await asyncio.sleep(1)
+        log(f"SEARCH: '{title}'")
+
+        # x = (
+        #     OngLog
+        #     .select(OngLog, OngLogIndex.rank().alias("score"), OngLogTitle)
+        #     .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
+        #     .join(OngLogIndex, on=(OngLog.rowid == OngLogIndex.rowid))
+        #     .where(OngLogIndex.match(title))
+        #     .order_by(OngLogIndex.rank())
+        # )
+
+        x = (
+            OngLogIndex
+            .select(OngLog.titleid, OngLogIndex.title, OngLogIndex.rank().alias("score"), fn.DATE(fn.MAX(OngLog.start_time)).alias("last_played"))
+            .join(OngLog, on=(OngLogIndex.rowid == OngLog.titleid))
+            .where(OngLogIndex.match(title))
+            .order_by(OngLogIndex.rank())
+            .group_by(OngLog.titleid)
+        )
+
+        log(f"SEARCH RESULT COUNT: {len(x)}")
+
+        if len(x) == 0:
+            embed = discord.Embed(
+                title="Ongcode Search",
+                # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="", value="No matches found", inline=False)
+            await ctx.respond(embed=embed, ephemeral=True)
+            return
+
+        pagelist = []
+
+        page_count = (len(x) // MATCH_LIMIT) + 1
+        for i, chunk in enumerate(ichunked(x, MATCH_LIMIT)):
+            page_num = i + 1
+            response_all = f"### Ongcode Title Search Results (page {page_num} of {page_count})\n"
+            response_all += f"`{"id":>5}` - `last play ` - `title`\n"
+            for row in chunk:
+                # print(ppretty(row))
+                # rowdate = datetime.fromisoformat(str(row.start_time)).date()
+
+                # msg_url = f"{ONG_SPREADSHEET_URL}?range=A{row.rowid}"
+                # (score: {abs(row.score):.2f})\n"
+                response = f"*`{row.onglog.titleid:>5}`* - `{row.last_played}` - {row.title}\n"
+
+                response_all += response
+
+            if page_num == 1:
+                response_all += "\nUse `/onglog title info <id>` for individual song info"
+
+            pagelist.append(
+                pages.Page(content=response_all)
+            )
+
+        paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, timeout=600)
+        await paginator.respond(ctx.interaction, ephemeral=True)
+
+        sys.stdout.flush()
 
 
 
@@ -423,7 +513,8 @@ def parse_args() -> argparse.Namespace:
         parsed_args.credentials_file = Path(__file__).parent / "credentials.toml"
 
     if parsed_args.gsheets_credentials_file is None:
-        parsed_args.gsheets_credentials_file = Path(__file__).parent / "gsheets_credentials.json"
+        parsed_args.gsheets_credentials_file = Path(
+            __file__).parent / "gsheets_credentials.json"
 
     if parsed_args.dbfile is None:
         parsed_args.dbfile = Path(__file__).parent / f"onglog_{parsed_args.environment}.db"
@@ -475,68 +566,7 @@ def main() -> int:
     log("INFO: onglog processing complete")
 
     bot = OnglogBot(botargs=args)
-
-    @bot.slash_command(name="onglog", description="Search for ongcode")
-    async def cmd_find_onglog(
-        ctx: discord.ApplicationContext,
-        title: discord.Option(str, "Partial song title"),
-    ):
-        # await ctx.trigger_typing()
-        # await asyncio.sleep(1)
-        log(f"SEARCH: '{title}'")
-
-        # x = (
-        #     OngLog
-        #     .select(OngLog, OngLogIndex.rank().alias("score"), OngLogTitle)
-        #     .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
-        #     .join(OngLogIndex, on=(OngLog.rowid == OngLogIndex.rowid))
-        #     .where(OngLogIndex.match(title))
-        #     .order_by(OngLogIndex.rank())
-        # )
-
-        x = (
-            OngLogIndex
-            .select(OngLog.titleid, OngLogIndex.title, OngLogIndex.rank().alias("score"), fn.DATE(fn.MAX(OngLog.start_time)).alias("last_played"))
-            .join(OngLog, on=(OngLogIndex.rowid == OngLog.titleid))
-            .where(OngLogIndex.match(title))
-            .order_by(OngLogIndex.rank())
-            .group_by(OngLog.titleid)
-        )
-
-        log(f"SEARCH RESULT COUNT: {len(x)}")
-
-        if len(x) == 0:
-            embed = discord.Embed(
-                title="Ongcode Search",
-                # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="", value="No matches found", inline=False)
-            await ctx.respond(embed=embed, ephemeral=True)
-            return
-
-        pagelist = []
-
-        for i, chunk in enumerate(ichunked(x, MATCH_LIMIT)):
-            response_all = f"### Ongcode Search Results (page {i + 1} of {(len(x) // MATCH_LIMIT) + 1})\n"
-            # response_all += "**"
-            for row in chunk:
-                print(ppretty(row))
-                # rowdate = datetime.fromisoformat(str(row.start_time)).date()
-
-                # msg_url = f"{ONG_SPREADSHEET_URL}?range=A{row.rowid}"
-                response = f"*`{row.onglog.titleid}`* - `{row.last_played}` - {row.title} (score: {abs(row.score):.2f})\n"
-
-                response_all += response
-
-            pagelist.append(
-                pages.Page(content=response_all)
-            )
-
-        paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, timeout=600)
-        await paginator.respond(ctx.interaction, ephemeral=True)
-
-        sys.stdout.flush()
+    bot.add_cog(OnglogCommands(bot))
 
     bot.run(creds["token"])
     return 0
