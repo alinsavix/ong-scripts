@@ -361,6 +361,7 @@ class OnglogCommands(commands.Cog):
 
     onglog_cmds = SlashCommandGroup("onglog", "onglog search & info commands")
     title_cmds = onglog_cmds.create_subgroup("title", "song title commands")
+    user_cmds = onglog_cmds.create_subgroup("user", "user commands")
 
     @commands.slash_command()
     async def sync(self, ctx):
@@ -509,12 +510,12 @@ class OnglogCommands(commands.Cog):
         first_played = x[0].start_date.date()
         first_req = x[0].requester
 
-        response_all += f"First played: {first_played}"
+        response_all += f"**First played:** {first_played}"
         if first_req:
             response_all += f" (req'd by {first_req})"
         response_all += "\n"
 
-        response_all += f"Last played: {last_played}"
+        response_all += f"**Last played:** {last_played}"
         if last_req:
             response_all += f"(req'd by {last_req})"
         response_all += "\n"
@@ -527,6 +528,81 @@ class OnglogCommands(commands.Cog):
         # embed.add_field(name="", value=response_all)
         await ctx.respond(response_all, ephemeral=True)
         return
+
+
+    @user_cmds.command(name="info", description="Give info/stats for a twitch user")
+    async def cmd_onglog_user_info(
+        self,
+        ctx: discord.ApplicationContext,
+        username: discord.Option(str, "Twitch username"),
+    ):
+        # await ctx.trigger_typing()
+        # await asyncio.sleep(1)
+        log(f"SEARCH: user {username}")
+
+        x = (
+            OngLog
+            .select(OngLog.rowid.alias("onglog_line"), fn.DATE(OngLog.start_time).alias("play_date"), OngLogTitle.title, OngLog.request_type)
+            .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
+            .where(
+                (OngLog.requester == username) &
+                (
+                    OngLog.notes.is_null() |
+                    ~(OngLog.notes.contains("tier"))
+                )
+            )
+            .order_by(OngLog.start_time.asc())
+        )
+
+        if len(x) == 0:
+            embed = discord.Embed(
+                title="Onglog User Info",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="", value=f"No requests found for user '{username}'", inline=False)
+            await ctx.respond(embed=embed, ephemeral=True)
+            return
+
+        # print(f"results: {len(x)}")
+        # for row in x:
+        #     print(ppretty(row))
+
+        # Count occurrences of each request type
+        from collections import Counter
+        req_counts = Counter(row.request_type for row in x)
+
+        req_total = sum(req_counts.values())
+        req_counts["Loop"] = 0 if "Loop" not in req_counts else req_counts["Loop"]
+        req_counts["Piano"] = 0 if "Piano" not in req_counts else req_counts["Piano"]
+        req_other = req_total - req_counts['Loop'] - req_counts['Piano']
+
+        response_all = f"### Twitch user '{username}'\n\n"
+        response_all += f"{req_total} total requests ({req_counts['Loop']} loops, {req_counts['Piano']} piano-only"
+        if req_other > 0:
+            response_all += f", {req_other} other"
+        response_all += ")\n\n"
+
+        first_req_date = x[0].play_date.date()
+        response_all += "**First request:**\n"
+        response_all += f"`{first_req_date}` - {x[0].onglogtitle.title}\n\n"
+
+        response_all += "**Most recent requests:**\n"
+        for row in x[-5:]:
+            req_date = row.play_date.date()
+            response_all += f"`{req_date}` - {row.onglogtitle.title}\n"
+
+        # embed = discord.Embed(
+        #     title="Ongcode Search",
+        #     # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
+        #     color=discord.Color.red()
+        # )
+        # embed.add_field(name="", value=response_all)
+        await ctx.respond(response_all, ephemeral=True)
+        return
+
+
+
+
         # x = (
         #     OngLog
         #     .select(OngLog, OngLogIndex.rank().alias("score"), OngLogTitle)
