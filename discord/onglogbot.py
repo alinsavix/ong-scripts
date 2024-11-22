@@ -373,7 +373,7 @@ class OnglogCommands(commands.Cog):
 
 
     @title_cmds.command(name="search", description="Search onglog for song title")
-    async def cmd_find_onglog(
+    async def cmd_onglog_title_search(
         self,
         ctx: discord.ApplicationContext,
         title: discord.Option(str, "Partial song title"),
@@ -399,6 +399,151 @@ class OnglogCommands(commands.Cog):
             .order_by(OngLogIndex.rank())
             .group_by(OngLog.titleid)
         )
+
+        log(f"SEARCH RESULT COUNT: {len(x)}")
+
+        if len(x) == 0:
+            embed = discord.Embed(
+                title="Onglog Title Search",
+                # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="", value="No matches found", inline=False)
+            await ctx.respond(embed=embed, ephemeral=True)
+            return
+
+        pagelist = []
+
+        page_count = (len(x) // MATCH_LIMIT) + 1
+        for i, chunk in enumerate(ichunked(x, MATCH_LIMIT)):
+            page_num = i + 1
+            response_all = f"### Onglog Title Search Results (page {page_num} of {page_count})\n"
+            response_all += f"`{"id":>5}` - `last play ` - `title`\n"
+            for row in chunk:
+                # print(ppretty(row))
+                # rowdate = datetime.fromisoformat(str(row.start_time)).date()
+
+                # msg_url = f"{ONG_SPREADSHEET_URL}?range=A{row.rowid}"
+                # (score: {abs(row.score):.2f})\n"
+                response = f"*`{row.onglog.titleid:>5}`* - `{row.last_played}` - {row.title}\n"
+
+                response_all += response
+
+            if page_num == 1:
+                response_all += "\nUse `/onglog title info <id>` for individual song info"
+
+            pagelist.append(
+                pages.Page(content=response_all)
+            )
+
+        paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, timeout=600)
+        await paginator.respond(ctx.interaction, ephemeral=True)
+
+        sys.stdout.flush()
+
+
+    @title_cmds.command(name="info", description="Give info/stats for a song from the onglog")
+    async def cmd_onglog_title_info(
+        self,
+        ctx: discord.ApplicationContext,
+        titleid: discord.Option(int, "Title id"),
+    ):
+        # await ctx.trigger_typing()
+        # await asyncio.sleep(1)
+        log(f"SEARCH: id {titleid}")
+
+        # Make sure the titleid requested actually exists.
+        x = OngLogTitle.get_or_none(OngLogTitle.rowid == titleid)
+        if x is None:
+            embed = discord.Embed(
+                title="Onglog Title Info",
+                # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="", value=f"There is no song title with the id '{titleid}'", inline=False)
+            await ctx.respond(embed=embed, ephemeral=True)
+            return
+
+        title = x.title
+        print(f"TITLE: {title}")
+        # Okay, so it exists (and we know the title), so lets generate some stats.
+
+        x = (
+            OngLog
+            .select(OngLog.request_type, fn.COUNT().alias("play_count"))
+            .where(OngLog.titleid == titleid)
+            .group_by(OngLog.request_type)
+        )
+
+        play_count = {row.request_type: row.play_count for row in x}
+        play_total = sum(play_count.values())
+        play_count["Loop"] = 0 if "Loop" not in play_count else play_count["Loop"]
+        play_count["Piano"] = 0 if "Piano" not in play_count else play_count["Piano"]
+        play_other = play_total - play_count['Loop'] - play_count['Piano']
+
+        response_all = f"### {title}\nTitle id {titleid}\n"
+        response_all += f"Played {play_total} times ({play_count['Loop']} loops, {play_count['Piano']} piano-only"
+        if play_other > 0:
+            response_all += f", {play_other} other"
+        response_all += ")\n\n"
+
+        x = (
+            OngLog
+            .select(OngLog.requester, OngLog.start_time, fn.DATE(OngLog.start_time).alias("start_date"))
+            .where(OngLog.titleid == titleid)
+            .order_by(OngLog.start_time.desc())
+            .limit(1)
+        )
+
+        last_played = x[0].start_date.date()
+        last_req = x[0].requester
+
+        x = (
+            OngLog
+            .select(OngLog.requester, OngLog.start_time, fn.DATE(OngLog.start_time).alias("start_date"))
+            .where(OngLog.titleid == titleid)
+            .order_by(OngLog.start_time.asc())
+            .limit(1)
+        )
+
+        first_played = x[0].start_date.date()
+        first_req = x[0].requester
+
+        response_all += f"First played: {first_played}"
+        if first_req:
+            response_all += f" (req'd by {first_req})"
+        response_all += "\n"
+
+        response_all += f"Last played: {last_played}"
+        if last_req:
+            response_all += f"(req'd by {last_req})"
+        response_all += "\n"
+
+        # embed = discord.Embed(
+        #     title="Ongcode Search",
+        #     # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
+        #     color=discord.Color.red()
+        # )
+        # embed.add_field(name="", value=response_all)
+        await ctx.respond(response_all, ephemeral=True)
+        return
+        # x = (
+        #     OngLog
+        #     .select(OngLog, OngLogIndex.rank().alias("score"), OngLogTitle)
+        #     .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
+        #     .join(OngLogIndex, on=(OngLog.rowid == OngLogIndex.rowid))
+        #     .where(OngLogIndex.match(title))
+        #     .order_by(OngLogIndex.rank())
+        # )
+
+        x = (
+            OngLogIndex
+            .select(OngLog.titleid, OngLogIndex.title, OngLogIndex.rank().alias("score"), fn.DATE(fn.MAX(OngLog.start_time)).alias("last_played"))
+            .join(OngLog, on=(OngLogIndex.rowid == OngLog.titleid))
+                .where(OngLogIndex.match(title))
+                .order_by(OngLogIndex.rank())
+                .group_by(OngLog.titleid)
+            )
 
         log(f"SEARCH RESULT COUNT: {len(x)}")
 
