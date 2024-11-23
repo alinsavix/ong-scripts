@@ -1,0 +1,14 @@
+[Unit]
+Description=onglog search discord bot
+After=network-online.target
+
+[Service]
+Type=simple
+Environment="BASEDIR=/root/ong-scripts/discord"
+ExecStart=${BASEDIR}/venv/bin/python3 ${BASEDIR}/onglogbot.py --env prod
+
+Restart=on-failure
+RestartSec=300s
+
+[Install]
+WantedBy=multi-user.target

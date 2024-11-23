@@ -1,0 +1,14 @@
+[Unit]
+Description=onglog search discord bot database updater
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment="BASEDIR=/root/ong-scripts/discord"
+ExecStart=${BASEDIR}/venv/bin/python3 ${BASEDIR}/onglogbot.py --env prod --update-only
+
+Restart=on-failure
+RestartSec=900s
+
+[Install]
+WantedBy=multi-user.target
