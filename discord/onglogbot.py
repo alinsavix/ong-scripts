@@ -199,8 +199,7 @@ def onglog_update(args: argparse.Namespace):
     start_index = valid_rows.index.min() if not valid_rows.empty else None
 
     if not start_index:
-        log(f"INFO: No rows with 'Order' value of 0 found after row {
-            start_row_num}. Using EARLIEST_ROW as starting point.")
+        log(f"INFO: No rows with 'Order' value of 0 found after row {start_row_num}. Using EARLIEST_ROW as starting point.")
         start_index = EARLIEST_ROW - 1
     else:
         log(f"INFO: Starting processing from row {start_index + 1}")
