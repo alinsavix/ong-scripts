@@ -112,7 +112,6 @@ mod_rolename = None
 # make sure to also read https://guide.pycord.dev/getting-started/more-features
 class OngcodeBot(discord.Bot):
     botchannel: discord.TextChannel
-    # botguild: discord.Guild
     last_nonid_msg_id: int
     last_nonid_msg_date: datetime.datetime
     caught_up: bool = False
@@ -335,6 +334,13 @@ def parse_args() -> argparse.Namespace:
         help="database file to use"
     )
 
+    parser.add_argument(
+        "--debug-queries",
+        default=False,
+        action="store_true",
+        help="print all queries to stderr",
+    )
+
     parsed_args = parser.parse_args()
 
     if parsed_args.credentials_file is None:
@@ -349,6 +355,12 @@ def main():
 
     args = parse_args()
     creds = get_credentials(args.credentials_file, args.environment)
+
+    if args.debug_queries:
+        import logging
+        logger = logging.getLogger('peewee')
+        logger.addHandler(logging.StreamHandler())
+        logger.setLevel(logging.DEBUG)
 
     if args.ongcode_guild is None:
         args.ongcode_guild = creds.get("guild", None)
@@ -388,7 +400,7 @@ def main():
     # async def cmd_ping(ctx):
     #     await ctx.respond(f"Pong! Latency is {bot.latency * 1000:.1f}ms")
 
-    @discord.ext.commands.has_role(args.moderator_role)
+    # @discord.ext.commands.has_role(args.moderator_role)
     @bot.slash_command(name="ongcode", description="Search for ongcode")
     async def cmd_find_ongcode(
         ctx: discord.ApplicationContext,
@@ -403,7 +415,7 @@ def main():
         # FTS5Model only list .search() as a class method. That's effectively
         # an entire query unto itself, though, so we have to use match() and
         # do the ranking ourselves
-        x = (
+        q = (
             OngCode
             .select(OngCode, OngCodeIndex.rank().alias("score"))
             .join(OngCodeIndex, on=(OngCode.mainmsg_id == OngCodeIndex.rowid))
@@ -411,9 +423,9 @@ def main():
             .order_by(OngCodeIndex.rank())
         )
 
-        log(f"SEARCH RESULT COUNT: {len(x)}")
+        log(f"SEARCH RESULT COUNT: {len(q)}")
 
-        if len(x) == 0:
+        if len(q) == 0:
             embed = discord.Embed(
                 title="Ongcode Search",
                 # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
@@ -425,21 +437,21 @@ def main():
 
         pagelist = []
 
-        for i, chunk in enumerate(ichunked(x, MATCH_LIMIT)):
+        for i, chunk in enumerate(ichunked(q, MATCH_LIMIT)):
             # embed = discord.Embed(
             #     title=f"Ongcode Search Results (page {i+1} of {(len(x) // MATCH_LIMIT) + 1})",
             #     # description=f"Top matches{shown}:",
             #     color=discord.Color.green()
             # )
 
-            response_all = f"### Ongcode Search Results (page {i+1} of {(len(x) // MATCH_LIMIT) + 1})\n"
+            response_all = f"### Ongcode Search Results (page {i+1} of {(len(q) // MATCH_LIMIT) + 1})\n"
             for row in chunk:
                 rowdate = datetime.datetime.fromisoformat(str(row.mainmsg_date)).date()
 
                 msg_url = f"https://discord.com/channels/{bot_guild.id}/{bot_channel.id}/{row.mainmsg_id}"
                 response = f"{msg_url} - `{rowdate}` - {row.titlemsg_text} (score: {abs(row.score):.2f})\n"
-                # response = f"|{abs(row.score):.2f} - {row.title}\n"
                 response_all += response
+
                 # embed.add_field(
                 #     name="",
                 #     # value="A really nice field with some information. Provided by [Pycord](https://pycord.dev/)\nmeow1\nmeow2",
@@ -465,7 +477,6 @@ def main():
         # Send the response
         paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, timeout=600)
         await paginator.respond(ctx.interaction, ephemeral=True)
-        # await ctx.respond(embed=embed, ephemeral=True)
 
         sys.stdout.flush()
 
@@ -474,7 +485,7 @@ def main():
         if isinstance(error, discord.ext.commands.MissingRole):
             await ctx.respond("Permission denied", ephemeral=True)
 
-    @discord.ext.commands.has_role(args.moderator_role)
+    # @discord.ext.commands.has_role(args.moderator_role)
     @bot.slash_command(name="oc", description="Search for ongcode (alias for /ongcode)")
     async def cmd_find_ongcode_alias(
         ctx: discord.ApplicationContext,

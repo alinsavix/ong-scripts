@@ -105,18 +105,6 @@ def get_db():
     return _db
 
 
-# Example function to query onglog entries
-# def get_onglog_entries():
-#     get_db()
-#     return session.query(OngLog).all()
-
-
-# Function to find onglog entry by a given date & time
-def find_onglog_entry_by_datetime(datetime):
-    # db = get_db()
-    # return session.query(OngLog).filter(OngLog.start_time <= datetime, OngLog.end_time >= datetime).first()
-    return OngLog.select().where((OngLog.start_time <= datetime) & (OngLog.end_time >= datetime)).first()
-
 
 def set_onglog_meta(key: str, value: str):
     meta = OngLogMeta.replace(
@@ -149,14 +137,6 @@ def get_title_id(title: str) -> int:
     idx.execute()
 
     return t.rowid
-
-# # Create a datetime object for Saturday, September 18, 2024 at 8:00 AM
-# target_datetime = datetime(2024, 9, 29, 2, 0)
-# print(f"Target datetime: {target_datetime}")
-
-# # Find onglog entries for the target datetime
-# entries = find_onglog_entry_by_datetime(target_datetime)
-# print(f"Onglog entries found: {ppretty(entries)}")
 
 
 def log(msg: str) -> None:
@@ -297,62 +277,27 @@ def onglog_update(args: argparse.Namespace):
             )
             onglog_entry.execute()
 
-            # onglog_index_entry = OngLogIndex.replace(
-            #     rowid=index + 1,
-            #     title=row['Title']
-            # )
-            # onglog_index_entry.execute()
 
     set_onglog_meta("last_processed_row", str(index + 1))
 
 
-bot_guild = None
-
-# make sure to also read https://guide.pycord.dev/getting-started/more-features
 class OnglogBot(discord.Bot):
-    botchannel: discord.TextChannel
-    # botguild: discord.Guild
-
     def __init__(self, botargs: argparse.Namespace):
         self.botargs = botargs
 
-        # lnm_id = get_onglog_meta("last_nonid_msg_id")
-        # lnm_date = get_onglog_meta("last_nonid_msg_date")
-        # assert lnm_id is not None and lnm_date is not None
-
-        # self.last_nonid_msg_id = int(lnm_id)
-        # self.last_nonid_msg_date = datetime.fromisoformat(lnm_date)
-
         intents = discord.Intents.default()
         # intents.presences = True
-        intents.messages = True
-        intents.message_content = True
+        # intents.messages = True
+        # intents.message_content = True
         intents.reactions = True
         # intents.typing = True
-        intents.members = True
+        # intents.members = True
 
         super().__init__(intents=intents)   # , status=discord.Status.invisible)
 
     async def on_ready(self):
         # print(ppretty(self))
         log(f"{self.user} (id {self.user.id}) is online")
-
-        # log(f"finding channel #{self.botargs.onglog_channel}")
-        # channel = discord.utils.get(self.get_all_channels(
-        # ), guild__name=self.botargs.onglog_guild, name=self.botargs.onglog_channel)
-
-        # if channel is None:
-        #     log(f"ERROR: channel #{self.botargs.onglog_channel} not found, can't reasonably continue")
-        #     os._exit(1)
-
-        # log(f"found channel with id {channel.id}")
-        # self.botchannel = channel
-        # global bot_channel, bot_guild
-        # bot_channel = channel
-        # bot_guild = channel.guild
-
-        # await self.message_catchup()
-        # sys.stdout.flush()
 
 
 class OnglogCommands(commands.Cog):
@@ -362,16 +307,6 @@ class OnglogCommands(commands.Cog):
     onglog_cmds = SlashCommandGroup("onglog", "onglog search & info commands")
     title_cmds = onglog_cmds.create_subgroup("title", "song title commands")
     user_cmds = onglog_cmds.create_subgroup("user", "user commands")
-
-    @commands.slash_command()
-    async def sync(self, ctx):
-        print("sync command")
-        # if ctx.author.id == 540337738520723459:
-        #     await self.tree.sync()
-        #     await ctx.send('Command tree synced.')
-        # else:
-        #     await ctx.send('You must be the owner to use this command!')
-
 
     @title_cmds.command(name="search", description="Search onglog for song title")
     async def cmd_onglog_title_search(
@@ -383,30 +318,21 @@ class OnglogCommands(commands.Cog):
         # await asyncio.sleep(1)
         log(f"SEARCH: '{title}'")
 
-        # x = (
-        #     OngLog
-        #     .select(OngLog, OngLogIndex.rank().alias("score"), OngLogTitle)
-        #     .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
-        #     .join(OngLogIndex, on=(OngLog.rowid == OngLogIndex.rowid))
-        #     .where(OngLogIndex.match(title))
-        #     .order_by(OngLogIndex.rank())
-        # )
-
-        x = (
+        q = (
             OngLogIndex
-            .select(OngLog.titleid, OngLogIndex.title, OngLogIndex.rank().alias("score"), fn.DATE(fn.MAX(OngLog.start_time)).alias("last_played"))
+            .select(OngLog.titleid, OngLogIndex.title, OngLogIndex.rank().alias("score"),
+                    fn.DATE(fn.MAX(OngLog.start_time)).alias("last_played"))
             .join(OngLog, on=(OngLogIndex.rowid == OngLog.titleid))
             .where(OngLogIndex.match(title))
             .order_by(OngLogIndex.rank())
             .group_by(OngLog.titleid)
         )
 
-        log(f"SEARCH RESULT COUNT: {len(x)}")
+        log(f"SEARCH RESULT COUNT: {len(q)}")
 
-        if len(x) == 0:
+        if len(q) == 0:
             embed = discord.Embed(
                 title="Onglog Title Search",
-                # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
                 color=discord.Color.red()
             )
             embed.add_field(name="", value="No matches found", inline=False)
@@ -415,14 +341,13 @@ class OnglogCommands(commands.Cog):
 
         pagelist = []
 
-        page_count = (len(x) // MATCH_LIMIT) + 1
-        for i, chunk in enumerate(ichunked(x, MATCH_LIMIT)):
+        page_count = (len(q) // MATCH_LIMIT) + 1
+        for i, chunk in enumerate(ichunked(q, MATCH_LIMIT)):
             page_num = i + 1
             response_all = f"### Onglog Title Search Results (page {page_num} of {page_count})\n"
             response_all += f"`{"id":>5}` - `last play ` - `title`\n"
             for row in chunk:
                 # print(ppretty(row))
-                # rowdate = datetime.fromisoformat(str(row.start_time)).date()
 
                 # msg_url = f"{ONG_SPREADSHEET_URL}?range=A{row.rowid}"
                 # (score: {abs(row.score):.2f})\n"
@@ -437,7 +362,7 @@ class OnglogCommands(commands.Cog):
                 pages.Page(content=response_all)
             )
 
-        paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, timeout=600)
+        paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, show_disabled=False, timeout=15)
         await paginator.respond(ctx.interaction, ephemeral=True)
 
         sys.stdout.flush()
@@ -454,29 +379,28 @@ class OnglogCommands(commands.Cog):
         log(f"SEARCH: id {titleid}")
 
         # Make sure the titleid requested actually exists.
-        x = OngLogTitle.get_or_none(OngLogTitle.rowid == titleid)
-        if x is None:
+        q = OngLogTitle.get_or_none(OngLogTitle.rowid == titleid)
+        if q is None:
             embed = discord.Embed(
                 title="Onglog Title Info",
-                # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
                 color=discord.Color.red()
             )
             embed.add_field(name="", value=f"There is no song title with the id '{titleid}'", inline=False)
             await ctx.respond(embed=embed, ephemeral=True)
             return
 
-        title = x.title
+        title = q.title
         print(f"TITLE: {title}")
-        # Okay, so it exists (and we know the title), so lets generate some stats.
 
-        x = (
+        # Okay, so it exists (and we know the title), so lets generate some stats.
+        q = (
             OngLog
             .select(OngLog.request_type, fn.COUNT().alias("play_count"))
             .where(OngLog.titleid == titleid)
             .group_by(OngLog.request_type)
         )
 
-        play_count = {row.request_type: row.play_count for row in x}
+        play_count = {row.request_type: row.play_count for row in q}
         play_total = sum(play_count.values())
         play_count["Loop"] = 0 if "Loop" not in play_count else play_count["Loop"]
         play_count["Piano"] = 0 if "Piano" not in play_count else play_count["Piano"]
@@ -488,7 +412,7 @@ class OnglogCommands(commands.Cog):
             response_all += f", {play_other} other"
         response_all += ")\n\n"
 
-        x = (
+        q = (
             OngLog
             .select(OngLog.requester, OngLog.start_time, fn.DATE(OngLog.start_time).alias("start_date"))
             .where(OngLog.titleid == titleid)
@@ -496,10 +420,10 @@ class OnglogCommands(commands.Cog):
             .limit(1)
         )
 
-        last_played = x[0].start_date.date()
-        last_req = x[0].requester
+        last_played = q[0].start_date.date()
+        last_req = q[0].requester
 
-        x = (
+        q = (
             OngLog
             .select(OngLog.requester, OngLog.start_time, fn.DATE(OngLog.start_time).alias("start_date"))
             .where(OngLog.titleid == titleid)
@@ -507,22 +431,28 @@ class OnglogCommands(commands.Cog):
             .limit(1)
         )
 
-        first_played = x[0].start_date.date()
-        first_req = x[0].requester
+        first_played = q[0].start_date.date()
+        first_req = q[0].requester
 
-        response_all += f"**First played:** {first_played}"
-        if first_req:
-            response_all += f" (req'd by {first_req})"
-        response_all += "\n"
 
-        response_all += f"**Last played:** {last_played}"
-        if last_req:
-            response_all += f"(req'd by {last_req})"
-        response_all += "\n"
+        if first_played == last_played:
+            response_all += f"**Played:** {first_played}"
+            if first_req:
+                response_all += f" (req'd by {first_req})"
+        else:
+            response_all += f"**First played:** {first_played}"
+            if first_req:
+                response_all += f" (req'd by {first_req})"
+            response_all += "\n"
+
+            response_all += f"**Last played:** {last_played}"
+            if last_req:
+                response_all += f"(req'd by {last_req})"
+            response_all += "\n"
 
         # embed = discord.Embed(
-        #     title="Ongcode Search",
-        #     # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
+        #     title="Onglog Search",
+        #     # description="I'm the Onglog bot. I'm here to help you search the onglog",
         #     color=discord.Color.red()
         # )
         # embed.add_field(name="", value=response_all)
@@ -540,9 +470,10 @@ class OnglogCommands(commands.Cog):
         # await asyncio.sleep(1)
         log(f"SEARCH: user {username}")
 
-        x = (
+        q = (
             OngLog
-            .select(OngLog.rowid.alias("onglog_line"), fn.DATE(OngLog.start_time).alias("play_date"), OngLogTitle.title, OngLog.request_type)
+            .select(OngLog.rowid.alias("onglog_line"), fn.DATE(OngLog.start_time).alias("play_date"),
+                    OngLogTitle.title, OngLog.request_type)
             .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
             .where(
                 (OngLog.requester == username) &
@@ -554,7 +485,7 @@ class OnglogCommands(commands.Cog):
             .order_by(OngLog.start_time.asc())
         )
 
-        if len(x) == 0:
+        if len(q) == 0:
             embed = discord.Embed(
                 title="Onglog User Info",
                 color=discord.Color.red()
@@ -563,31 +494,31 @@ class OnglogCommands(commands.Cog):
             await ctx.respond(embed=embed, ephemeral=True)
             return
 
-        # print(f"results: {len(x)}")
-        # for row in x:
+        # for row in q:
         #     print(ppretty(row))
 
         # Count occurrences of each request type
         from collections import Counter
-        req_counts = Counter(row.request_type for row in x)
+        req_counts = Counter(row.request_type for row in q)
 
         req_total = sum(req_counts.values())
         req_counts["Loop"] = 0 if "Loop" not in req_counts else req_counts["Loop"]
         req_counts["Piano"] = 0 if "Piano" not in req_counts else req_counts["Piano"]
         req_other = req_total - req_counts['Loop'] - req_counts['Piano']
 
+        # generate the response
         response_all = f"### Twitch user '{username}'\n\n"
         response_all += f"{req_total} total requests ({req_counts['Loop']} loops, {req_counts['Piano']} piano-only"
         if req_other > 0:
             response_all += f", {req_other} other"
         response_all += ")\n\n"
 
-        first_req_date = x[0].play_date.date()
+        first_req_date = q[0].play_date.date()
         response_all += "**First request:**\n"
-        response_all += f"`{first_req_date}` - {x[0].onglogtitle.title}\n\n"
+        response_all += f"`{first_req_date}` - {q[0].onglogtitle.title}\n\n"
 
         response_all += "**Most recent requests:**\n"
-        for row in x[-5:]:
+        for row in q[-5:]:
             req_date = row.play_date.date()
             response_all += f"`{req_date}` - {row.onglogtitle.title}\n"
 
@@ -599,69 +530,6 @@ class OnglogCommands(commands.Cog):
         # embed.add_field(name="", value=response_all)
         await ctx.respond(response_all, ephemeral=True)
         return
-
-
-
-
-        # x = (
-        #     OngLog
-        #     .select(OngLog, OngLogIndex.rank().alias("score"), OngLogTitle)
-        #     .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
-        #     .join(OngLogIndex, on=(OngLog.rowid == OngLogIndex.rowid))
-        #     .where(OngLogIndex.match(title))
-        #     .order_by(OngLogIndex.rank())
-        # )
-
-        x = (
-            OngLogIndex
-            .select(OngLog.titleid, OngLogIndex.title, OngLogIndex.rank().alias("score"), fn.DATE(fn.MAX(OngLog.start_time)).alias("last_played"))
-            .join(OngLog, on=(OngLogIndex.rowid == OngLog.titleid))
-                .where(OngLogIndex.match(title))
-                .order_by(OngLogIndex.rank())
-                .group_by(OngLog.titleid)
-            )
-
-        log(f"SEARCH RESULT COUNT: {len(x)}")
-
-        if len(x) == 0:
-            embed = discord.Embed(
-                title="Ongcode Search",
-                # description="I'm the Ongcode bot. I'm here to help you find ongcode in the channel",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="", value="No matches found", inline=False)
-            await ctx.respond(embed=embed, ephemeral=True)
-            return
-
-        pagelist = []
-
-        page_count = (len(x) // MATCH_LIMIT) + 1
-        for i, chunk in enumerate(ichunked(x, MATCH_LIMIT)):
-            page_num = i + 1
-            response_all = f"### Ongcode Title Search Results (page {page_num} of {page_count})\n"
-            response_all += f"`{"id":>5}` - `last play ` - `title`\n"
-            for row in chunk:
-                # print(ppretty(row))
-                # rowdate = datetime.fromisoformat(str(row.start_time)).date()
-
-                # msg_url = f"{ONG_SPREADSHEET_URL}?range=A{row.rowid}"
-                # (score: {abs(row.score):.2f})\n"
-                response = f"*`{row.onglog.titleid:>5}`* - `{row.last_played}` - {row.title}\n"
-
-                response_all += response
-
-            if page_num == 1:
-                response_all += "\nUse `/onglog title info <id>` for individual song info"
-
-            pagelist.append(
-                pages.Page(content=response_all)
-            )
-
-        paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, timeout=600)
-        await paginator.respond(ctx.interaction, ephemeral=True)
-
-        sys.stdout.flush()
-
 
 
 def parse_args() -> argparse.Namespace:
@@ -693,32 +561,24 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--onglog-guild",
-        type=str,
-        default=None,
-        help="Discord guild (server) to use for onglog things"
-    )
-
-    parser.add_argument(
         "--dbfile",
         type=Path,
         default=None,
         help="database file to use"
     )
 
-    # FIXME: make this work again
-    # parser.add_argument(
-    #     "--onglog-db-file",
-    #     type=Path,
-    #     default=Path(__file__).parent / 'onglog.db',
-    #     help="location of onglog database",
-    # )
-
     parser.add_argument(
         "--force-fetch",
         default=False,
         action="store_true",
         help="force fetching the onglog, even if ours is recent",
+    )
+
+    parser.add_argument(
+        "--update-only",
+        default=False,
+        action="store_true",
+        help="update the onglog data and then exit",
     )
 
     parser.add_argument(
@@ -740,6 +600,9 @@ def parse_args() -> argparse.Namespace:
     if parsed_args.dbfile is None:
         parsed_args.dbfile = Path(__file__).parent / f"onglog_{parsed_args.environment}.db"
 
+    if parsed_args.update_only:
+        parsed_args.force_fetch = True
+
     return parsed_args
 
 
@@ -760,82 +623,22 @@ def main() -> int:
 
     creds = get_credentials(args.credentials_file, args.environment)
 
-    if args.onglog_guild is None:
-        args.onglog_guild = creds.get("guild", None)
-
-    if args.onglog_guild is None:
-        log("ERROR: No guild specified and no guild in configuration")
-        sys.exit(1)
-
-    # if args.ongcode_channel is None:
-    #     args.ongcode_channel = creds.get("channel", None)
-
-    # if args.ongcode_channel is None:
-    #     log("ERROR: No channel specified and no channel in configuration")
-    #     sys.exit(1)
-
-    # if args.moderator_role is None:
-    #     args.moderator_role = creds.get("moderator_role", None)
-
     log("INFO: In startup")
-    log(f"INFO: Using guild '{args.onglog_guild}'")
-    # log(f"INFO: Using channel '{args.ongcode_channel}'")
 
     initialize_db(args.dbfile)
     onglog_update(args)
 
     log("INFO: onglog processing complete")
 
+    if args.update_only:
+        log("INFO: update-only mode, exiting")
+        return 0
+
     bot = OnglogBot(botargs=args)
     bot.add_cog(OnglogCommands(bot))
 
     bot.run(creds["token"])
     return 0
-    # onglog_tmp = Path(f"onglog_{args.environment}.xlsx")
-    # gc = gspread.service_account(filename=args.gsheets_credentials_file)
-    # onglog = gc.open_by_url(ONG_SPREADSHEET_URL)
-    # ws = onglog.worksheet("Songs")
-
-    # a bunch of testing code, commented out, that we need to come back to
-    # z = datetime(2024,10,6,5,40,15)
-    # print(z)
-    # x = find_onglog_entry_by_datetime(z)
-    # print(x)
-    # sys.exit(0)
-
-    # x = OngLog.select().join(OngLogIndex, on=(OngLog.rowid == OngLogIndex.rowid)).where(OngLogIndex.match("weight of the world"))
-
-    # x = OngLogIndex.search(
-    #     "weight world",
-    #     weights={"title": 2.0},
-    #     with_score=True,
-    #     score_alias="score").join(OngLog, on=(OngLogIndex.rowid == OngLog.rowid)).distinct([OngLog.title]).execute()
-
-    # x = OngLogIndex.search(
-    #     "weight world",
-    #     weights={"title": 2.0},
-    #     with_score=True,
-    #     score_alias="score").order_by(SQL("score")).execute() # order_by(OngLogIndex.score.desc()).limit(10).execute()
-
-    # res = OngLogIndex.search(
-    #     "weight world",
-    #     weights={"title": 2.0},
-    #     with_score=True,
-    #     score_alias="score").execute() # order_by(OngLogIndex.score.desc()).limit(10).execute()
-
-    # things = {x.title: x.score for x in res}
-    # print(things)
-    # subq = OngLogIndex.search(
-    #     "weight world",
-    #     weights={"title": 2.0},
-    #     with_score=True,
-    #     score_alias="score").alias("subq")
-
-    # x = OngLog.select(subq.c.rowid, subq.c.score, subq.c.title).execute()
-    # for row in x:
-    #     print(row.rowid, row.score, row.title)
-
-
 
 
 if __name__ == "__main__":
