@@ -410,6 +410,8 @@ def main():
         # await asyncio.sleep(1)
         log(f"SEARCH: '{title}'")
 
+        title = title.replace(",", " ")
+
         # this query was SO incredibly painful to figure out. Hint: You can't
         # use OngCodeIndex.search() here, even though the docs for peewee's
         # FTS5Model only list .search() as a class method. That's effectively

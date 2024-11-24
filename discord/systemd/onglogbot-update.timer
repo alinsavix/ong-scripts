@@ -2,11 +2,8 @@
 Description=periodically sync onglog database
 After=network-online.target
 
-
 [Timer]
-OnActiveSec=30minutes
 OnCalendar=*-*-* 0,6,12,18:*:00
-
 
 [Install]
 WantedBy=multi-user.target

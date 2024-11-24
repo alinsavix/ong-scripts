@@ -4,8 +4,14 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-Environment="BASEDIR=/root/ong-scripts/discord"
-ExecStart=${BASEDIR}/venv/bin/python3 ${BASEDIR}/onglogbot.py --env prod --update-only
+
+User=ongbots
+Group=ongmod
+Environment="BASEDIR=/home/ongbots/ong-scripts/discord"
+
+RemainAfterExit=no
+
+ExecStart=/bin/bash -c "'${BASEDIR}/venv/bin/python3' '${BASEDIR}/onglogbot.py' --env prod --update-only"
 
 Restart=on-failure
 RestartSec=900s

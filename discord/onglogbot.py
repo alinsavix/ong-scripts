@@ -155,7 +155,7 @@ def get_credentials(cfgfile: Path, environment: str) -> Dict[str, str]:
 
 
 def onglog_update(args: argparse.Namespace):
-    onglog_tmp = Path(f"onglog_{args.environment}.xlsx")
+    onglog_tmp = Path(__file__).parent / f"onglog_{args.environment}.xlsx"
     gc = gspread.service_account(filename=args.gsheets_credentials_file)
 
     # Check if the onglog_tmp file is older than 8 hours
@@ -316,6 +316,8 @@ class OnglogCommands(commands.Cog):
         # await ctx.trigger_typing()
         # await asyncio.sleep(1)
         log(f"SEARCH: '{title}'")
+
+        title = title.replace(",", " ")
 
         q = (
             OngLogIndex
