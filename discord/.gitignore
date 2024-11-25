@@ -1,0 +1,8 @@
+# sekrit stuffs
+credentials.toml
+gsheets_credentials.json
+
+# sqlite stuffs
+*.db
+*.db-shm
+*.db-wal

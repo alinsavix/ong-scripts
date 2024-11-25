@@ -1,0 +1,23 @@
+py-cord
+tdvutil
+toml
+peewee
+more-itertools
+mypy
+types-peewee
+types-toml
+dateparser
+gspread
+openpyxl
+pandas
+
+# our standard flake8 bits (...maybe we need a metapackage)
+flake8-async
+flake8-bugbear
+flake8-builtins
+flake8-comprehensions
+flake8-import-conventions
+Flake8-pyproject
+flake8-secure-coding-standard
+flake8_simplify
+flake8-use-pathlib
