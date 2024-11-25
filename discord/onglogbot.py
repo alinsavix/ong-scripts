@@ -63,7 +63,7 @@ class OngLog(Model):
     start_time = DateTimeField(index=True, null=False)
     end_time = DateTimeField(index=True, null=False)
     stream_uptime = FloatField(null=True)
-    requester = CharField(null=True, index=True)
+    requester = CharField(null=True, index=True, collation="NOCASE")
     titleid = IntegerField(null=False, index=True)
     genre = CharField(null=True)
     request_type = CharField(null=True)
@@ -474,7 +474,7 @@ class OnglogCommands(commands.Cog):
         q = (
             OngLog
             .select(OngLog.rowid.alias("onglog_line"), fn.DATE(OngLog.start_time).alias("play_date"),
-                    OngLogTitle.title, OngLog.request_type)
+                    OngLogTitle.title, OngLog.request_type, OngLog.requester)
             .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
             .where(
                 (OngLog.requester == username) &
@@ -508,7 +508,7 @@ class OnglogCommands(commands.Cog):
         req_other = req_total - req_counts['Loop'] - req_counts['Piano']
 
         # generate the response
-        response_all = f"### Twitch user '{username}'\n\n"
+        response_all = f"### Twitch user '{q[0].requester}'\n\n"
         response_all += f"{req_total} total requests ({req_counts['Loop']} loops, {req_counts['Piano']} piano-only"
         if req_other > 0:
             response_all += f", {req_other} other"
