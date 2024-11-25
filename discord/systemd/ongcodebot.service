@@ -3,12 +3,14 @@ Description=onglog search discord bot
 After=network-online.target
 
 [Service]
+Type=simple
+
 User=ongbots
 Group=ongmod
-
-Type=simple
 Environment="BASEDIR=/home/ongbots/ong-scripts/discord"
-ExecStart=/bin/bash -c "'${BASEDIR}/venv/bin/python3' '${BASEDIR}/ongcodebot.py' --env xxxx"
+
+# Sucks that we can't use $BASEDIR in the executable path :(
+ExecStart=/home/ongbots/ong-scripts/discord/venv/bin/python3 "${BASEDIR}/ongcodebot.py" --env xxxx
 
 Restart=on-failure
 RestartSec=300s
