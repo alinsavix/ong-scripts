@@ -277,6 +277,7 @@ def onglog_update(args: argparse.Namespace):
             onglog_entry.execute()
 
 
+    assert isinstance(index, int)
     set_onglog_meta("last_processed_row", str(index + 1))
 
 
@@ -286,7 +287,7 @@ class OnglogBot(discord.Bot):
 
         intents = discord.Intents.default()
         # intents.presences = True
-        # intents.messages = True
+        intents.messages = True
         # intents.message_content = True
         intents.reactions = True
         # intents.typing = True
@@ -297,15 +298,46 @@ class OnglogBot(discord.Bot):
     async def on_ready(self):
         # print(ppretty(self))
         log(f"{self.user} (id {self.user.id}) is online")
+        guild = self.guilds[0]
 
 
 class OnglogCommands(commands.Cog):
     def __init__(self, bot: discord.Bot):
         self.bot = bot
 
-    onglog_cmds = SlashCommandGroup("onglog", "onglog search & info commands")
-    title_cmds = onglog_cmds.create_subgroup("title", "song title commands")
-    user_cmds = onglog_cmds.create_subgroup("user", "user commands")
+        self.bot.add_listener(self.on_msg_admin, "on_message")
+
+    onglog_cmds = SlashCommandGroup("onglog", "onglog search & info commands", case_insensitive=True)
+    title_cmds = onglog_cmds.create_subgroup("title", "song title commands", case_insensitive=True)
+    user_cmds = onglog_cmds.create_subgroup("user", "user commands", case_insensitive=True)
+
+    # Admin controls (not much here)
+    async def on_msg_admin(self, message: discord.Message):
+        if message.author.id == self.bot.user.id:
+            return
+
+        if message.author.id != 540337738520723459:   # alinsa/deadvix
+            return
+
+        if not isinstance(message.channel, discord.channel.DMChannel):
+            return
+
+        if message.content != "/announce":
+            return
+
+        guild = self.bot.guilds[0]
+        channel = discord.utils.get(guild.text_channels, name=self.bot.botargs.channel)
+
+        if channel is None:
+            log(f"ERROR: Can't find announce channel '{self.bot.botargs.channel}'")
+            await message.reply(f"ERROR: Can't find announce channel '{self.bot.botargs.channel}'")
+            return
+
+        ANNOUNCE_TEXT = "Hi everyone! I'm the onglog bot! I'm here to help make searching the onglog easy and painless. Type `/onglog help` to learn more about me! Because I'm new, you may need to restart discord to properly register my commands."
+
+        await channel.send(ANNOUNCE_TEXT)
+        await message.reply("Ok")
+
 
     @title_cmds.command(name="search", description="Search onglog for song title")
     async def cmd_onglog_title_search(
@@ -477,10 +509,9 @@ class OnglogCommands(commands.Cog):
                     OngLogTitle.title, OngLog.request_type, OngLog.requester)
             .join(OngLogTitle, on=(OngLog.titleid == OngLogTitle.rowid))
             .where(
-                (OngLog.requester == username) &
-                (
-                    OngLog.notes.is_null() |
-                    ~(OngLog.notes.contains("tier"))
+                (OngLog.requester == username)
+                & (
+                    OngLog.notes.is_null() | ~(OngLog.notes.contains("tier"))
                 )
             )
             .order_by(OngLog.start_time.asc())
@@ -508,20 +539,30 @@ class OnglogCommands(commands.Cog):
         req_other = req_total - req_counts['Loop'] - req_counts['Piano']
 
         # generate the response
-        response_all = f"### Twitch user '{q[0].requester}'\n\n"
+        response_all = f"### User information for Twitch user '{q[0].requester}'\n\n"
         response_all += f"{req_total} total requests ({req_counts['Loop']} loops, {req_counts['Piano']} piano-only"
         if req_other > 0:
             response_all += f", {req_other} other"
         response_all += ")\n\n"
 
         first_req_date = q[0].play_date.date()
+        if q[0].request_type:
+            first_req_type = f" ({q[0].request_type})"
+        else:
+            first_req_type = ""
+
         response_all += "**First request:**\n"
-        response_all += f"`{first_req_date}` - {q[0].onglogtitle.title}\n\n"
+        response_all += f"`{first_req_date}` - {q[0].onglogtitle.title}{first_req_type}\n\n"
 
         response_all += "**Most recent requests:**\n"
         for row in q[-5:]:
+            if row.request_type:
+                req_type = f" ({row.request_type})"
+            else:
+                req_type = ""
+
             req_date = row.play_date.date()
-            response_all += f"`{req_date}` - {row.onglogtitle.title}\n"
+            response_all += f"`{req_date}` - {row.onglogtitle.title}{req_type}\n"
 
         # embed = discord.Embed(
         #     title="Ongcode Search",
@@ -532,6 +573,32 @@ class OnglogCommands(commands.Cog):
         await ctx.respond(response_all, ephemeral=True)
         return
 
+
+    @onglog_cmds.command(name="help", description="Help on using the onglog commands")
+    async def cmd_onglog_help(
+        self,
+        ctx: discord.ApplicationContext,
+    ):
+        log(f"HELP: user {ctx.user.name}")
+
+        # embed = discord.Embed(
+        #     title="Ongcode Search Bot",
+        #     description="Beepbeep. Poopoo. I'm the Ongcode bot.",
+        #     color=discord.Color.red()
+        # )
+
+        txt = "## Ongcode Search Bot\n"
+        txt += "Beepbeep. Poopoop. I'm the Ongcode bot. I can help you search the onglog without exploding your phone in the process!\n"
+        txt += "### Commands you can use:\n"
+        txt += "`/onglog title search <partial title>` - Search for a song by (partial) title\n"
+        txt += "`/onglog title info <id>` - Get info about a song by its id, as returned by the previous command\n"
+        txt += "`/onglog user info <username>` - Get info about a user and their past requests\n\n"
+        txt += "Bot responses are ephemeral (only visible to you), so feel free to go ham with your searches."
+
+        # embed.add_field(name="", value=txt)
+
+        await ctx.respond(txt, ephemeral=True)
+        return
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -559,6 +626,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="test",
         help="environment to use"
+    )
+
+    parser.add_argument(
+        "--channel",
+        type=str,
+        help="channel to send messages to (when needed)"
     )
 
     parser.add_argument(
@@ -634,6 +707,9 @@ def main() -> int:
     if args.update_only:
         log("INFO: update-only mode, exiting")
         return 0
+
+    if args.channel is None:
+        args.channel = creds["channel"]
 
     bot = OnglogBot(botargs=args)
     bot.add_cog(OnglogCommands(bot))
