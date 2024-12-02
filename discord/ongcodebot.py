@@ -76,6 +76,10 @@ def initialize_db(dbfile: Path):
     _db_initialized = True
 
 
+def get_db() -> SqliteExtDatabase:
+    return _db
+
+
 def set_ongcode_meta(key: str, value: str):
     meta = OngCodeMeta.replace(
         key=key,
@@ -410,8 +414,6 @@ def main():
         # await asyncio.sleep(1)
         log(f"SEARCH: '{title}'")
 
-        title = title.replace(",", " ")
-
         # this query was SO incredibly painful to figure out. Hint: You can't
         # use OngCodeIndex.search() here, even though the docs for peewee's
         # FTS5Model only list .search() as a class method. That's effectively
@@ -427,6 +429,11 @@ def main():
 
         log(f"SEARCH RESULT COUNT: {len(q)}")
 
+        if discord.utils.get(ctx.author.roles, name=args.moderator_role):
+            is_mod = True
+        else:
+            is_mod = False
+
         if len(q) == 0:
             embed = discord.Embed(
                 title="Ongcode Search",
@@ -440,41 +447,21 @@ def main():
         pagelist = []
 
         for i, chunk in enumerate(ichunked(q, MATCH_LIMIT)):
-            # embed = discord.Embed(
-            #     title=f"Ongcode Search Results (page {i+1} of {(len(x) // MATCH_LIMIT) + 1})",
-            #     # description=f"Top matches{shown}:",
-            #     color=discord.Color.green()
-            # )
-
             response_all = f"### Ongcode Search Results (page {i+1} of {(len(q) // MATCH_LIMIT) + 1})\n"
             for row in chunk:
                 rowdate = datetime.datetime.fromisoformat(str(row.mainmsg_date)).date()
 
                 msg_url = f"https://discord.com/channels/{bot_guild.id}/{bot_channel.id}/{row.mainmsg_id}"
-                response = f"{msg_url} - `{rowdate}` - {row.titlemsg_text} (score: {abs(row.score):.2f})\n"
+                if is_mod:
+                    response = f"{msg_url} - `{rowdate}` - {row.titlemsg_text} (score: {abs(row.score):.2f})\n"
+                else:
+                    response = f"`{rowdate}` - {row.titlemsg_text} (score: {abs(row.score):.2f})\n"
+
                 response_all += response
 
-                # embed.add_field(
-                #     name="",
-                #     # value="A really nice field with some information. Provided by [Pycord](https://pycord.dev/)\nmeow1\nmeow2",
-                #     value=response,
-                #     inline=False
-                # )
-
-            # pagelist.append(
-            #     pages.Page(embeds=[embed])
-            # )
             pagelist.append(
                 pages.Page(content=response_all)
             )
-        # embed.add_field(name="Inline Field 1", value="Inline Field 1", inline=True)
-        # embed.add_field(name="Inline Field 2", value="Inline Field 2", inline=True)
-        # embed.add_field(name="Inline Field 3", value="Inline Field 3", inline=True)
-
-        # embed.set_footer(text="Footer! No markdown here.")  # footers can have icons too
-        # embed.set_author(name="Pycord Team", icon_url="https://example.com/link-to-my-image.png")
-        # embed.set_thumbnail(url="https://example.com/link-to-my-thumbnail.png")
-        # embed.set_image(url="https://example.com/link-to-my-banner.png")
 
         # Send the response
         paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, timeout=600)
@@ -487,7 +474,6 @@ def main():
         if isinstance(error, discord.ext.commands.MissingRole):
             await ctx.respond("Permission denied", ephemeral=True)
 
-    # @discord.ext.commands.has_role(args.moderator_role)
     @bot.slash_command(name="oc", description="Search for ongcode (alias for /ongcode)")
     async def cmd_find_ongcode_alias(
         ctx: discord.ApplicationContext,
