@@ -44,7 +44,7 @@ MATCH_LIMIT = 10
 
 class OngLogTitle(Model):
     rowid = AutoField()
-    title = CharField(null=False, index=True)
+    title = CharField(null=False, index=True, collation="NOCASE")
 
     class Meta:
         table_name = "onglog_title"
@@ -105,7 +105,6 @@ def get_db():
     return _db
 
 
-
 def set_onglog_meta(key: str, value: str):
     meta = OngLogMeta.replace(
         key=key,
@@ -124,6 +123,9 @@ def get_onglog_meta(key: str) -> Optional[str]:
 
 
 def get_title_id(title: str) -> int:
+    # trim and collapse whitespace
+    title = " ".join(title.split())
+
     t = OngLogTitle.get_or_none(OngLogTitle.title == title)
     if t:
         return t.rowid
@@ -349,7 +351,7 @@ class OnglogCommands(commands.Cog):
         # await asyncio.sleep(1)
         log(f"SEARCH: '{title}'")
 
-        title = title.replace(",", " ")
+        title = FTS5Model.clean_query(title)
 
         q = (
             OngLogIndex
