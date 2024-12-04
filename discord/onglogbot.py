@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import io
+import json
 import os
 import sys
 from datetime import datetime, timedelta
@@ -281,6 +282,23 @@ def onglog_update(args: argparse.Namespace):
 
     assert isinstance(index, int)
     set_onglog_meta("last_processed_row", str(index + 1))
+
+    # Generate some interesting stats
+    stats = {}
+    stats["total_rows"] = OngLog.select().count()
+    stats["total_requesters"] = OngLog.select(OngLog.requester).distinct().count()
+    stats["total_titles"] = OngLogTitle.select().count()
+    stats["total_loops"] = OngLog.select(fn.COUNT(OngLog.request_type)).where(OngLog.request_type == "Loop").scalar()
+    stats["total_piano"] = OngLog.select(fn.COUNT(OngLog.request_type)).where(OngLog.request_type == "Piano").scalar()
+    stats["total_other"] = stats["total_rows"] - stats["total_loops"] - stats["total_piano"]
+    # Get most recent stream start time
+    stats["latest_request"] = OngLog.select(OngLog.start_time).order_by(OngLog.start_time.desc()).limit(1).scalar().split(".")[0]
+    stats["last_import"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Convert stats to json for easy retrieval, and save
+    stats_json = json.dumps(stats, indent=4)
+    set_onglog_meta("stats", stats_json)
+    print(stats_json)
 
 
 class OnglogBot(discord.Bot):
@@ -594,13 +612,51 @@ class OnglogCommands(commands.Cog):
         txt += "### Commands you can use:\n"
         txt += "`/onglog title search <partial title>` - Search for a song by (partial) title\n"
         txt += "`/onglog title info <id>` - Get info about a song by its id, as returned by the previous command\n"
-        txt += "`/onglog user info <username>` - Get info about a user and their past requests\n\n"
+        txt += "`/onglog user info <username>` - Get info about a user and their past requests\n"
+        txt += "`/onglog stats` - Get some basic statistics about the onglog\n\n"
         txt += "Bot responses are ephemeral (only visible to you), so feel free to go ham with your searches."
 
         # embed.add_field(name="", value=txt)
 
         await ctx.respond(txt, ephemeral=True)
         return
+
+
+    @onglog_cmds.command(name="stats", description="Show some basic onglog statistics")
+    async def cmd_onglog_stats(
+        self,
+        ctx: discord.ApplicationContext,
+    ):
+        log(f"STATS: user {ctx.user.name}")
+
+        # embed = discord.Embed(
+        #     title="Ongcode Search Bot",
+        #     description="Beepbeep. Poopoo. I'm the Ongcode bot.",
+        #     color=discord.Color.red()
+        # )
+
+        stats_json = get_onglog_meta("stats")
+        if stats_json is None:
+            await ctx.respond("No stats currentlyavailable", ephemeral=True)
+            return
+
+        stats = json.loads(stats_json)
+
+        txt = "## Onglog Statistics\n"
+        txt += f"Total songs played: {stats['total_rows']}\n"
+        txt += f"Unique song titles: {stats['total_titles']}\n"
+        txt += f"Unique requesters: {stats['total_requesters']}\n\n"
+
+        txt += f"Total loops: {stats['total_loops']}\n"
+        txt += f"Total piano: {stats['total_piano']}\n"
+        txt += f"Total other: {stats['total_other']}\n\n"
+
+        txt += f"Most recent request: {stats['latest_request']}\n"
+        txt += f"Last data import: {stats['last_import']}\n"
+
+        await ctx.respond(txt, ephemeral=True)
+        return
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
