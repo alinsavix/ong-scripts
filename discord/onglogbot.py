@@ -3,6 +3,7 @@ import argparse
 import io
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 from enum import IntEnum
@@ -15,8 +16,9 @@ import gspread
 import pandas as pd
 import toml
 from more_itertools import ichunked
-from peewee import (SQL, AutoField, CharField, DateTimeField, FloatField,
-                    ForeignKeyField, IntegerField, Model, SqliteDatabase, fn)
+from peewee import (SQL, AutoField, CharField, DateField, DateTimeField,
+                    FloatField, ForeignKeyField, IntegerField, Model,
+                    SqliteDatabase, fn)
 from playhouse.sqlite_ext import (FTS5Model, RowIDField, SearchField,
                                   SqliteExtDatabase)
 from tdvutil import hms_to_sec, ppretty
@@ -75,6 +77,16 @@ class OngLog(Model):
     class Meta:
         table_name = "onglog"
 
+class OngHighlight(Model):
+    rowid = IntegerField(primary_key=True, null=False)
+    order = IntegerField(null=False)
+    release_date = DateField(null=True)
+    titleid = IntegerField(null=False, index=True)
+    link = CharField(null=True)
+
+    class Meta:
+        table_name = "onglog_highlight"
+
 class OngLogMeta(Model):
     key = CharField(primary_key=True)
     value = CharField()
@@ -94,9 +106,9 @@ def initialize_db(dbfile: Path):
     _db = SqliteExtDatabase(None)
     _db.init(dbfile, pragmas={"journal_mode": "wal",
              "cache_size": -1 * 64 * 1024, "foreign_keys": 1})
-    _db.bind([OngLogTitle, OngLogIndex, OngLog, OngLogMeta])
+    _db.bind([OngLogTitle, OngLogIndex, OngLog, OngLogMeta, OngHighlight])
     _db.connect()
-    _db.create_tables([OngLogTitle, OngLogIndex, OngLog, OngLogMeta])
+    _db.create_tables([OngLogTitle, OngLogIndex, OngLog, OngLogMeta, OngHighlight])
 
     _db_initialized = True
 
@@ -179,11 +191,15 @@ def onglog_update(args: argparse.Namespace):
         onglog_tmp.write_bytes(dl)
         log(f"INFO: Saved onglog as {onglog_tmp}")
 
+    onglog_update_main(onglog_tmp)
+    onglog_update_highlights(onglog_tmp)
 
+
+def onglog_update_main(onglog_file: Path):
     # By saying no header, it means we can keep the onglong row number equal
     # to the pd row number + 1
-    df = pd.read_excel(onglog_tmp, header=None, sheet_name="Songs", names=[
-                       "Date", "Uptime", "Order", "Requester", "Title", "Genre", "Type", "Links", "Looper", "FileNum"])
+    df = pd.read_excel(onglog_file, header=None, sheet_name="Songs", names=[
+                    "Date", "Uptime", "Order", "Requester", "Title", "Genre", "Type", "Links", "Looper", "FileNum"])
 
     last_processed_row = get_onglog_meta("last_processed_row")
 
@@ -223,17 +239,17 @@ def onglog_update(args: argparse.Namespace):
             if index >= resume_row:
                 log(f"INFO: Processing row {index + 1}: {row.Title} ({row.Order})")
 
-            if not pd.notna(row['Date']):
+            if not pd.notna(row["Date"]):
                 continue
 
-            if row['Order'] == "-" or int(row['Order']) == 0:
+            if row["Order"] == "-" or int(row["Order"]) == 0:
                 continue
 
-            if not row['Date'] or row['Date'] == "-":
+            if not row["Date"] or row["Date"] == "-":
                 continue
 
             # Convert start_time to Sydney time
-            start_time_eastern = dateparser.parse(str(row['Date']))
+            start_time_eastern = dateparser.parse(str(row["Date"]))
             if start_time_eastern:
                 start_time_eastern = start_time_eastern.replace(tzinfo=eastern)
                 start_time = start_time_eastern.astimezone(sydney)
@@ -243,12 +259,12 @@ def onglog_update(args: argparse.Namespace):
             # Determine end_time based on the next row
             if index + 1 < len(df):
                 next_row = df.iloc[index + 1]
-                if next_row['Order'] == 0:  # Start of a new stream
+                if next_row["Order"] == 0:  # Start of a new stream
                     end_time = start_time + timedelta(hours=2) if start_time else None
-                elif next_row['Date'] == "-":  # hopefully rare corner case
+                elif next_row["Date"] == "-":  # hopefully rare corner case
                     continue
                 else:
-                    end_time_eastern = dateparser.parse(str(next_row['Date']))
+                    end_time_eastern = dateparser.parse(str(next_row["Date"]))
                     if end_time_eastern:
                         end_time_eastern = end_time_eastern.replace(tzinfo=eastern)
                         end_time = end_time_eastern.astimezone(sydney)
@@ -258,7 +274,7 @@ def onglog_update(args: argparse.Namespace):
                 end_time = start_time + timedelta(hours=2) if start_time else None
 
             try:
-                uptime = hms_to_sec(str(row['Uptime']))
+                uptime = hms_to_sec(str(row["Uptime"]))
             except ValueError:
                 uptime = None
 
@@ -267,15 +283,15 @@ def onglog_update(args: argparse.Namespace):
                 start_time=start_time,
                 end_time=end_time,
                 stream_uptime=uptime,
-                requester=row['Requester'] if (
-                    pd.notna(row['Requester']) and row['Requester'] != "-") else None,
-                titleid=get_title_id(row['Title']),
-                genre=row['Genre'] if pd.notna(row['Genre']) else None,
-                request_type=row['Type'] if pd.notna(row['Type']) else None,
-                notes=str(row['Links']) if (pd.notna(row['Links'])
-                                            and "Highlight" not in str(row['Links'])) else None,
-                looper_slot=row['Looper'] if pd.notna(row['Looper']) else None,
-                looper_file_number=row['FileNum'] if pd.notna(row['FileNum']) else None
+                requester=row["Requester"] if (
+                    pd.notna(row["Requester"]) and row["Requester"] != "-") else None,
+                titleid=get_title_id(row["Title"]),
+                genre=row["Genre"] if pd.notna(row["Genre"]) else None,
+                request_type=row["Type"] if pd.notna(row["Type"]) else None,
+                notes=str(row["Links"]) if (pd.notna(row["Links"])
+                                            and "Highlight" not in str(row["Links"])) else None,
+                looper_slot=row["Looper"] if pd.notna(row["Looper"]) else None,
+                looper_file_number=row["FileNum"] if pd.notna(row["FileNum"]) else None
             )
             onglog_entry.execute()
 
@@ -298,6 +314,86 @@ def onglog_update(args: argparse.Namespace):
     # Convert stats to json for easy retrieval, and save
     stats_json = json.dumps(stats, indent=4)
     set_onglog_meta("stats", stats_json)
+
+    print("ONGLOG STATS:")
+    print(stats_json)
+
+
+# FIXME: Is there any deduplication we can do here, with onglog_update_main?
+def onglog_update_highlights(onglog_file: Path):
+    # By saying no header, it means we can keep the onglong row number equal
+    # to the pd row number + 1
+    df = pd.read_excel(onglog_file, header=None, sheet_name="Youtube Catalogue", names=[
+        "Date", "Order", "Title", "Genre", "Link", "Requester", "Original Date", "Vocals", "Notes"])
+
+    last_processed_row = get_onglog_meta("last_processed_highlight_row")
+
+    resume_row = 0
+    if last_processed_row:
+        start_index = int(last_processed_row) - 25 - 1
+        log(f"INFO: Resuming onglog highlight processing from row {resume_row}")
+    else:
+        log(f"INFO: Starting onglog highlight processing from row {EARLIEST_ROW}")
+        start_index = 1
+
+    db = get_db()
+
+    # Adjust the loop to start from the identified row
+    df_subset = df.iloc[start_index:]
+
+    with db.atomic():
+        for index, row in df_subset.iterrows():
+            assert isinstance(index, int)
+
+            log(f"INFO: Processing row {index + 1}: {row.Title} ({row.Order})")
+
+            # invalid order == skip!
+            if row["Order"] == "-" or int(row["Order"]) == 0:
+                continue
+
+            if pd.isna(row["Title"]) or len(row["Title"]) < 10:
+                continue
+
+            if pd.isna(row["Date"]):
+                row["Date"] = None
+            elif not re.match(r'^\d{4}-\d{2}-\d{2}\s*', str(row["Date"])):
+                row["Date"] = None
+            else:
+                row["Date"] = str(row["Date"]).split(" ")[0]
+
+            if pd.isna(row["Link"]) or not str(row["Link"]).startswith('http'):
+                row["Link"] = None
+
+            highlight_entry = OngHighlight.replace(
+                rowid=index + 1,
+                order=row["Order"],
+                release_date=row["Date"],
+                titleid=get_title_id(row["Title"]),
+                link=row["Link"],
+            )
+            highlight_entry.execute()
+
+
+    assert isinstance(index, int)
+    set_onglog_meta("last_processed_highlight_row", str(index + 1))
+
+    # Generate some interesting stats
+    stats = {}
+    stats["total_highlights"] = OngHighlight.select().count()
+    # stats["total_titles"] = OngLogTitle.select().count()
+    latest_highlight = (
+        OngHighlight
+        .select(fn.DATE(OngHighlight.release_date).alias("release_date"))
+        .where(OngHighlight.release_date.is_null(False))
+        .order_by(OngHighlight.release_date.desc())
+        .limit(1).scalar()
+    )
+    stats["latest_highlight"] = str(latest_highlight)
+    stats["last_import"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Convert stats to json for easy retrieval, and save
+    stats_json = json.dumps(stats, indent=4)
+    set_onglog_meta("highlight_stats", stats_json)
     print(stats_json)
 
 
@@ -329,6 +425,7 @@ class OnglogCommands(commands.Cog):
 
     onglog_cmds = SlashCommandGroup("onglog", "onglog search & info commands", case_insensitive=True)
     title_cmds = onglog_cmds.create_subgroup("title", "song title commands", case_insensitive=True)
+    highlight_cmds = onglog_cmds.create_subgroup("highlight", "highlight commands", case_insensitive=True)
     user_cmds = onglog_cmds.create_subgroup("user", "user commands", case_insensitive=True)
 
     # Admin controls (not much here)
@@ -415,8 +512,14 @@ class OnglogCommands(commands.Cog):
                 pages.Page(content=response_all)
             )
 
-        paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, show_disabled=False, timeout=15)
-        await paginator.respond(ctx.interaction, ephemeral=True)
+        paginator = pages.Paginator(pages=pagelist, disable_on_timeout=True, show_disabled=False, timeout=10 * 60)
+
+
+        # kind of a hack ... if we only have one page, don't use the paginator
+        if len(pagelist) > 1:
+            await paginator.respond(ctx.interaction, ephemeral=True)
+        else:
+            await ctx.respond(response_all, ephemeral=True)
 
         sys.stdout.flush()
 
@@ -511,6 +614,98 @@ class OnglogCommands(commands.Cog):
         # embed.add_field(name="", value=response_all)
         await ctx.respond(response_all, ephemeral=True)
         return
+
+
+    @highlight_cmds.command(name="search", description="Search for a song highlight")
+    async def cmd_onglog_highlight_search(
+        self,
+        ctx: discord.ApplicationContext,
+        title: discord.Option(str, "Partial song title"),
+    ):
+        # await ctx.trigger_typing()
+        # await asyncio.sleep(1)
+        log(f"HIGHLIGHT SEARCH: '{title}'")
+
+        title = FTS5Model.clean_query(title)
+
+        q = (
+            OngLogIndex
+            .select(OngHighlight.titleid, OngLogIndex.title, OngHighlight.release_date, OngHighlight.order, OngHighlight.link)
+            .join(OngHighlight, on=(OngLogIndex.rowid == OngHighlight.titleid))
+            .where(OngLogIndex.match(title))
+            .order_by(OngHighlight.release_date.desc())
+        )
+        log(f"SEARCH RESULT COUNT: {len(q)}")
+
+        if len(q) == 0:
+            embed = discord.Embed(
+                title="Onglog Highlight Search",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="", value="No matches found", inline=False)
+            await ctx.respond(embed=embed, ephemeral=True)
+            return
+
+        pagelist = []
+
+        page_count = (len(q) // MATCH_LIMIT) + 1
+
+        in_unreleased = False
+        for i, chunk in enumerate(ichunked(q, MATCH_LIMIT)):
+            page_num = i + 1
+            response_all = f"### Onglog Highlight Search Results (page {page_num} of {page_count})\n"
+            # response_all += f"`{"id":>5}` - `last play ` - `title`\n"
+            # response_all += f"`Link` - `Date` - `Title`\n"
+
+            for row in chunk:
+                # print(ppretty(row))
+
+                # All the unreleased highlights will be grouped at the end, so
+                # once we hit one, add a header and add them without the link
+                if row.onghighlight.release_date is None and not in_unreleased:
+                    response_all += "\n **Unreleased:**\n"
+                    in_unreleased = True
+
+                if row.onghighlight.release_date is None:
+                    response_all += f"    `#{row.onghighlight.order}` - {row.title}\n"
+                    continue
+
+                if row.onghighlight.release_date is not None and row.onghighlight.link is not None:
+                    link = f"[Link](<{row.onghighlight.link}>)"
+                else:
+                    link = "----"
+                # msg_url = f"{ONG_SPREADSHEET_URL}?range=A{row.rowid}"
+                # (score: {abs(row.score):.2f})\n"
+
+                if row.onghighlight.release_date is not None:
+                    release_date = row.onghighlight.release_date
+                else:
+                    release_date = "----"
+
+                order = "#" + str(row.onghighlight.order)
+
+                # response = f"*`{row.onglog.titleid:>5}`* - `{row.last_played}` - {row.title}\n"
+                response = f"{link} - `{release_date}` - `{order:>5}` - {row.title}\n"
+
+                response_all += response
+
+            # if page_num == 1:
+            #     response_all += "\nUse `/onglog title info <id>` for individual song info"
+
+            pagelist.append(
+                pages.Page(content=response_all)
+            )
+
+        paginator = pages.Paginator(
+            pages=pagelist, disable_on_timeout=True, show_disabled=False, timeout=10 * 60)
+
+        # kind of a hack ... if we only have one page, don't use the paginator
+        if len(pagelist) > 1:
+            await paginator.respond(ctx.interaction, ephemeral=True)
+        else:
+            await ctx.respond(response_all, ephemeral=True)
+
+        sys.stdout.flush()
 
 
     @user_cmds.command(name="info", description="Give info/stats for a twitch user")
@@ -613,6 +808,7 @@ class OnglogCommands(commands.Cog):
         txt += "`/onglog title search <partial title>` - Search for a song by (partial) title\n"
         txt += "`/onglog title info <id>` - Get info about a song by its id, as returned by the previous command\n"
         txt += "`/onglog user info <username>` - Get info about a user and their past requests\n"
+        txt += "`/onglog highlight search <partial title>` - Search for a highlight by (partial) title\n"
         txt += "`/onglog stats` - Get some basic statistics about the onglog\n\n"
         txt += "Bot responses are ephemeral (only visible to you), so feel free to go ham with your searches."
 
@@ -642,6 +838,13 @@ class OnglogCommands(commands.Cog):
 
         stats = json.loads(stats_json)
 
+        highlight_stats_json = get_onglog_meta("highlight_stats")
+        if highlight_stats_json is None:
+            await ctx.respond("No highlight stats currentlyavailable", ephemeral=True)
+            return
+
+        highlight_stats = json.loads(highlight_stats_json)
+
         txt = "## Onglog Statistics\n"
         txt += f"Total songs played: {stats['total_rows']}\n"
         txt += f"Unique song titles: {stats['total_titles']}\n"
@@ -650,6 +853,8 @@ class OnglogCommands(commands.Cog):
         txt += f"Total loops: {stats['total_loops']}\n"
         txt += f"Total piano: {stats['total_piano']}\n"
         txt += f"Total other: {stats['total_other']}\n\n"
+
+        txt += f"Total highlights: {highlight_stats['total_highlights']}\n\n"
 
         txt += f"Most recent request: {stats['latest_request']}\n"
         txt += f"Last data import: {stats['last_import']}\n"
