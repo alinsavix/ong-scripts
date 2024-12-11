@@ -1,6 +1,6 @@
 [Unit]
 Description=ong data synchronization
-After=network-offline.target
+After=network-online.target
 After=tailscaled.service
 
 PartOf=ong-offline.target
@@ -8,6 +8,7 @@ PartOf=ong-offline.target
 [Service]
 Type=simple
 
+ExecStartPre=/root/ong-scripts/dataproc/datacleanup.sh
 ExecStart=/root/ong-scripts/dataproc/datasync_all.sh
 
 Restart=on-failure
