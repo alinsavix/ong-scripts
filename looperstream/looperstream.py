@@ -117,7 +117,7 @@ def run_ffmpeg(args: argparse.Namespace):
     # ffmpeg_cmd = ["py", "./sleep.py"]
 
     try:
-        logpath = f"/ong/looper/looper-{datestr}.log"
+        logpath = f"/ong/looper/looper {datestr}.log"
         log(f"INFO: ffmpeg startup, output logged to {logpath}")
         with open(logpath, "a") as logfile:
             print(f"COMMAND: {' '.join(ffmpeg_cmd)}", file=logfile)
