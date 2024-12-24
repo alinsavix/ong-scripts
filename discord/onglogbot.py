@@ -239,7 +239,7 @@ def onglog_update_main(onglog_file: Path):
             if index >= resume_row:
                 log(f"INFO: Processing row {index + 1}: {row.Title} ({row.Order})")
 
-            if not pd.notna(row["Date"]):
+            if pd.isna(row["Date"]) or pd.isna(row["Order"]):
                 continue
 
             if row["Order"] == "-" or int(row["Order"]) == 0:
@@ -348,7 +348,7 @@ def onglog_update_highlights(onglog_file: Path):
             log(f"INFO: Processing row {index + 1}: {row.Title} ({row.Order})")
 
             # invalid order == skip!
-            if row["Order"] == "-" or int(row["Order"]) == 0:
+            if pd.isna(row["Order"]) or row["Order"] == "-" or int(row["Order"]) == 0:
                 continue
 
             if pd.isna(row["Title"]) or len(row["Title"]) < 10:
