@@ -6,3 +6,6 @@ gsheets_credentials.json
 *.db
 *.db-shm
 *.db-wal
+
+# work files
+*.xlsx

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import copy
+import functools
 import json
 import os
 import platform
@@ -238,7 +240,64 @@ def dt_to_timecode(dt: str, fps: float) -> str:
 
 
 # FIXME: Only expected to work with integer framerates.
-def remux_with_timecode(args: argparse.Namespace, video_file: Path, remux_file: Path, metadata: MediaMeta) -> bool:
+def ffmpeg_extract_audio(args: argparse.Namespace, video_file: Path, audio_file: Path, metadata: MediaMeta) -> bool:
+    timeout = 30 * 60
+
+    fh, _tmpfile = tempfile.mkstemp(suffix=".m4a", prefix="tmp_extract_audio_", dir=audio_file.parent)
+    os.close(fh)
+    tmpfile = Path(_tmpfile)
+
+    # log(f"remuxing w/ timecode using tmpfile {tmpfile}")
+    print(f"EXTRACTING AUDIO FROM '{video_file.name}'")
+
+    # don't do a burned-in timecode right now
+    burn_in = False
+    if not burn_in:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-hwaccel", "auto",
+            "-i", str(video_file), "-vn", "-c:a", "copy",
+            "-y", str(tmpfile)
+        ]
+
+    if args.dry_run:
+        print("DRY RUN only, audio extraction command would have been: " + " ".join(cmd))
+        tmpfile.unlink(missing_ok=True)
+        return True
+
+    print(f"Running command: {' '.join(cmd)}")
+
+    try:
+        subprocess.run(args=cmd, shell=False, stdin=subprocess.DEVNULL,
+                       check=True, timeout=timeout)
+    except FileNotFoundError:
+        print("ERROR: couldn't execute ffmpeg, please make sure it exists in your PATH")
+        tmpfile.unlink(missing_ok=True)
+        return False
+    except subprocess.TimeoutExpired:
+        print(f"ERROR: audio extraction process timed out after {timeout} seconds")
+        tmpfile.unlink(missing_ok=True)
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: audio extraction process failed with ffmpeg exit code {e.returncode}")
+        tmpfile.unlink(missing_ok=True)
+        return False
+    except KeyboardInterrupt:
+        print("ERROR: audio extraction process interrupted")
+        tmpfile.unlink(missing_ok=True)
+        return False
+    except Exception:
+        print("ERROR: unknown error during audio extraction process, aborting")
+        tmpfile.unlink(missing_ok=True)
+        return False
+
+    # seems like it ran ok, rename the temp file
+    tmpfile.replace(audio_file)
+
+    return True
+
+
+# FIXME: Only expected to work with integer framerates.
+def ffmpeg_remux_with_timecode(args: argparse.Namespace, video_file: Path, audio_file: Path, metadata: MediaMeta) -> bool:
     # Not writing actual timecode right now
     # if metadata.start_time is None:
     #     print(f"WARNING: No start time found for '{video_file}', skipping")
@@ -250,7 +309,7 @@ def remux_with_timecode(args: argparse.Namespace, video_file: Path, remux_file: 
 
     timeout = 30 * 60
 
-    fh, _tmpfile = tempfile.mkstemp(suffix=".mp4", prefix="remux_", dir=remux_file.parent)
+    fh, _tmpfile = tempfile.mkstemp(suffix=".mp4", prefix="remux_", dir=audio_file.parent)
     os.close(fh)
     tmpfile = Path(_tmpfile)
 
@@ -323,20 +382,19 @@ def remux_with_timecode(args: argparse.Namespace, video_file: Path, remux_file: 
 
     # seems like it ran ok, rename the temp file
     # log(f"DEBUG: replacing {vidfile} with {tmpfile}")
-    tmpfile.replace(remux_file)
-
-    if args.keep_original:
-        return True
-    elif args.trash_dir:
-        video_file.rename(args.trash_dir / video_file.name)
-    else:
-        video_file.unlink()
+    tmpfile.replace(audio_file)
 
     return True
 
 
-# Generate metadata for audio-only file
+_meta_cache: Dict[Path, MediaMeta] = {}
+
 def gen_media_metadata(args: argparse.Namespace, media_file: Path) -> Optional[MediaMeta]:
+    global _meta_cache
+
+    if media_file in _meta_cache:
+        return copy.deepcopy(_meta_cache[media_file])
+
     try:
         probeinfo = ffmpeg.probe(media_file)
     except ffmpeg.Error as e:
@@ -399,21 +457,22 @@ def gen_media_metadata(args: argparse.Namespace, media_file: Path) -> Optional[M
 
     metadata = MediaMeta(filename, content_class, media_types, exact_times, start_time,
                          end_time, duration, framerate, size_bytes)
+    _meta_cache[media_file] = metadata
     return metadata
 
 
-def process_media(args: argparse.Namespace, video_file: Path, remuxed_file: Path, metadata_file: Path):
+def process_video(args: argparse.Namespace, video_file: Path, remuxed_file: Path, metadata_file: Path) -> bool:
     # print(f"Processing '{video_file}'")
     # if we already have metadata, and we're not forcing, skip
     if metadata_file.exists() and not args.force:
         print(f"Skipping '{video_file}': metadata already exists")
-        return
+        return True
 
     metadata = gen_media_metadata(args, video_file)
     if metadata is None:
         print(f"Failed to generate metadata for '{video_file}'")
-        print("WARNING: File will not be remuxed")
-        return
+        print("WARNING: File will not be processed")
+        return True
 
     if metadata.start_time is None:
         print(f"WARNING: No start time found for '{video_file}'")
@@ -423,7 +482,17 @@ def process_media(args: argparse.Namespace, video_file: Path, remuxed_file: Path
     # else:
     #     print(f"Wrote metadata for '{video_file}' (no timestamp found)")
 
-    ret = remux_with_timecode(args, video_file, remuxed_file, metadata)
+    if args.meta_only:
+        metadata.filename = remuxed_file.name
+        metadata_json = json.dumps(asdict(metadata), indent=4)
+
+        with metadata_file.open("w") as f:
+            f.write(metadata_json)
+        print(f"Wrote metadata to '{metadata_file}'")
+        return True
+
+    # if not doing metadata-only, actually remux the video
+    ret = ffmpeg_remux_with_timecode(args, video_file, remuxed_file, metadata)
     if ret is True:
         print(f"Wrote remuxed video to '{remuxed_file}'")
         metadata.filename = remuxed_file.name
@@ -432,8 +501,53 @@ def process_media(args: argparse.Namespace, video_file: Path, remuxed_file: Path
         with metadata_file.open("w") as f:
             f.write(metadata_json)
         print(f"Wrote metadata to '{metadata_file}'")
+        return True
+
     else:
         print(f"ERROR: Failed to remux video for '{video_file}'")
+        return False
+
+# Same as process_media, really, but for splitting off the audio
+def extract_audio(args: argparse.Namespace, video_file: Path, audio_file: Path, metadata_file: Path):
+    # print(f"Processing '{video_file}'")
+    # if we already have metadata, and we're not forcing, skip
+    if metadata_file.exists() and not args.force:
+        print(f"Skipping audio extraction for '{video_file}': metadata already exists")
+        return
+
+    # This does a little extra work because we've probably already generated
+    # the metadata, but it just makes things easier to do it this way.
+    metadata = gen_media_metadata(args, video_file)
+    if metadata is None:
+        print(f"Failed to generate audio metadata for '{video_file}'")
+        print("WARNING: File will not be processed")
+        return
+
+    if metadata.start_time is None:
+        print(f"WARNING: No start time found for audio extraction of '{video_file}'")
+
+    if args.meta_only:
+        metadata.filename = audio_file.name
+        metadata.media_types = "audio"
+        metadata_json = json.dumps(asdict(metadata), indent=4)
+
+        with metadata_file.open("w") as f:
+            f.write(metadata_json)
+        print(f"Wrote metadata to '{metadata_file}'")
+        return
+
+    # if not doing metadata-only, actually extract the audio
+    ret = ffmpeg_extract_audio(args, video_file, audio_file, metadata)
+    if ret is True:
+        print(f"Wrote extracted audio to '{audio_file}'")
+        metadata.filename = audio_file.name
+        metadata_json = json.dumps(asdict(metadata), indent=4)
+
+        with metadata_file.open("w") as f:
+            f.write(metadata_json)
+        print(f"Wrote extracted audio metadata to '{metadata_file}'")
+    else:
+        print(f"ERROR: Failed to extract audio from '{video_file}'")
 
 
 def parse_args() -> argparse.Namespace:
@@ -444,17 +558,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--remux-dest-dir",
         type=Path,
-        default=Path("."),
-        action=CheckFile(must_exist=True),
-        help="Directory to remux video files into"
-    )
-
-    parser.add_argument(
-        "--trash-dir",
-        type=Path,
+        # default=Path("."),
         default=None,
         action=CheckFile(must_exist=True),
-        help="Directory to move video files into when done",
+        help="Directory to remux video files into"
     )
 
     parser.add_argument(
@@ -472,19 +579,10 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--keep-original",
-        action="store_false",
+        "--meta-only",
+        action="store_true",
         default=False,
-        help="Keep original video file",
-    )
-
-    parser.add_argument(
-        "filenames",
-        type=Path,
-        nargs="+",
-        metavar="filename",
-        # action=CheckFile(extensions=valid_extensions, must_exist=True),
-        help="video file(s) to process",
+        help="Only generate metadata, don't remux",
     )
 
     parser.add_argument(
@@ -501,8 +599,39 @@ def parse_args() -> argparse.Namespace:
         help="Dry run, don't actually remux anything",
     )
 
-    parsed_args = parser.parse_args()
+    parser.add_argument(
+        "--split-audio",
+        action="store_true",
+        default=False,
+        help="Write audio into a separate file (but keep original audio, too)",
+    )
 
+    postgroup = parser.add_mutually_exclusive_group()
+    postgroup.add_argument(
+        "--trash-dir",
+        type=Path,
+        default=None,
+        action=CheckFile(must_exist=True),
+        help="Directory to move video files into when done",
+    )
+
+    postgroup.add_argument(
+        "--keep-original",
+        action="store_false",
+        default=False,
+        help="Keep original video file",
+    )
+
+    parser.add_argument(
+        "filenames",
+        type=Path,
+        nargs="+",
+        metavar="filename",
+        # action=CheckFile(extensions=valid_extensions, must_exist=True),
+        help="video file(s) to process",
+    )
+
+    parsed_args = parser.parse_args()
     return parsed_args
 
 
@@ -520,23 +649,47 @@ def main():
             case _:
                 remux_ext = ".mp4"
 
-        remuxed_file = args.remux_dest_dir / (src_file.stem + remux_ext)
-        print(f"Remuxing '{src_file}' to '{remuxed_file}'")
-        if remuxed_file.exists():
-            print(f"Skipping '{src_file}': '{remuxed_file}' already exists")
-            continue
+        if args.remux_dest_dir is not None:
+            remux_dest = args.remux_dest_dir
+        else:
+            remux_dest = src_file.parent
+
+        remuxed_file = remux_dest / (src_file.stem + remux_ext)
+
+        if not args.meta_only:
+            print(f"Remuxing '{src_file}' to '{remuxed_file}'")
+            if remuxed_file.exists():
+                print(f"Skipping '{src_file}': '{remuxed_file}' already exists")
+                continue
 
         metadata_file = remuxed_file.with_suffix(remuxed_file.suffix + '.meta')
         if metadata_file.exists():
             print(f"Skipping '{src_file}': '{metadata_file}' already exists")
             continue
 
-        process_media(args, src_file, remuxed_file, metadata_file)
+        # print(f"Processing '{src_file}', '{remuxed_file}', '{metadata_file}'")
+
+        if not process_video(args, src_file, remuxed_file, metadata_file):
+            print(f"ERROR: Failed to process '{src_file}', skipping")
+            continue
+
+        if args.split_audio and not args.meta_only:
+            audio_file = remuxed_file.with_suffix(".m4a")
+            audio_metadata_file = audio_file.with_suffix(audio_file.suffix + ".meta")
+            extract_audio(args, src_file, audio_file, audio_metadata_file)
+
+        if args.keep_original or args.meta_only:
+            continue
+        elif args.trash_dir:
+            src_file.rename(args.trash_dir / src_file.name)
+            print(f"Moved '{src_file}' to '{args.trash_dir}'")
+        else:
+            src_file.unlink()
+            print(f"Deleted '{src_file}'")
 
     global ocrapi
     if ocrapi is not None:
         ocrapi.End()
-
 
 
 if __name__ == "__main__":

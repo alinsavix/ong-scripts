@@ -1,0 +1,10 @@
+# credential things
+gsheets_credentials.json
+credentials.json
+credentials.toml
+
+# working data
+indexes/
+onglog.db
+onglog_tmp.xlsx
+yolov8*.pt
