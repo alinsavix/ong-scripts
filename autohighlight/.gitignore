@@ -7,4 +7,4 @@ credentials.toml
 indexes/
 onglog.db
 onglog_tmp.xlsx
-yolov8*.pt
+yolov[0-9]*.pt

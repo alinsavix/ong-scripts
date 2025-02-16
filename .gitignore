@@ -106,3 +106,4 @@ tests/report.html
 # never push our creds!
 credentials.json
 credentials.toml
+gsheets_credentials.json
