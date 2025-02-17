@@ -222,7 +222,7 @@ def main(argv: List[str]) -> int:
 
         # adjust by our time offset, to allow us to still have proper times
         # if Jon forgot to start the recording on time
-        onglog = hms_to_sec(row[Col.UPTIME]) + args.time_offset
+        onglog = hms_to_sec(row[Col.UPTIME]) - args.time_offset
 
         start_time_hms = sec_to_hms(onglog)
 
