@@ -99,6 +99,7 @@ def merge_media_files(args: argparse.Namespace, base_time: str, base_file: Path,
             return False
 
         print(f"Audio track (offset {pre_offset:>5d}ms): {additional_files[i]}")
+        sys.stdout.flush()
 
         # We can just leave in the -ss option, because having it set to 0 is
         # harmless
