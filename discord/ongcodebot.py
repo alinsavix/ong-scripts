@@ -489,6 +489,36 @@ def main():
         if isinstance(error, discord.ext.commands.MissingRole):
             await ctx.respond("Permission denied", ephemeral=True)
 
+
+    # Message command for sending ongcode to Jon
+    @bot.message_command(name="Send Ongcode to Jon")
+    async def cmd_ongcode_send(
+        ctx: discord.ApplicationContext, message: discord.Message
+    ):
+        # Right channel?
+        if message.channel.id != bot.botchannel.id:
+            return
+
+        # Not me?
+        if message.author.id == bot.user.id:
+            return
+
+        if discord.utils.get(ctx.author.roles, name=bot.botargs.moderator_role):
+            is_mod = True
+        else:
+            is_mod = False
+
+        if not is_mod:
+            await ctx.respond("Permission denied", ephemeral=True)
+            return
+
+        await ctx.respond(f"{ctx.author.name}, here's the message id: {message.id}!", ephemeral=True)
+        print(ppretty(ctx))
+        print(ppretty(message))
+        print(f"ZOT: {ctx.author.id}")
+        print(f"ZOT: {message.author.id}")
+
+
     # A couple of testing things
     class MyModal(discord.ui.Modal):
         def __init__(self, *args, **kwargs) -> None:
