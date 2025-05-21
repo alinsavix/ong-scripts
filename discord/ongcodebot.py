@@ -12,6 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import aiohttp
 import toml
 from more_itertools import ichunked
 from peewee import (SQL, AutoField, BigIntegerField, CharField, DateTimeField,
@@ -512,7 +513,33 @@ def main():
             await ctx.respond("Permission denied", ephemeral=True)
             return
 
-        await ctx.respond(f"{ctx.author.name}, here's the message id: {message.id}!", ephemeral=True)
+        # Send initial response
+        response = await ctx.respond(f"{ctx.author.name}, here's the message id: {message.id}!", ephemeral=True)
+        message_obj = await response.original_message()
+
+        # Get the message content
+        title = message.clean_content[:100]  # Truncate to 100 chars for title
+        body = message.clean_content
+
+        # Send to codething backend
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(
+                    "http://localhost:8001/songs/",
+                    json={
+                        "title": title,
+                        "body": body,
+                        "status": "PENDING"
+                    }
+                ) as response:
+                    if response.status == 200:
+                        await message_obj.edit(content=f"{ctx.author.name}, here's the message id: {message.id}!\nSuccessfully sent ongcode to Jon!")
+                    else:
+                        await message_obj.edit(content=f"{ctx.author.name}, here's the message id: {message.id}!\nFailed to send ongcode: {response.status}")
+            except Exception as e:
+                await message_obj.edit(content=f"{ctx.author.name}, here's the message id: {message.id}!\nError sending ongcode: {str(e)}")
+
+        # Keep existing debug printing
         print(ppretty(ctx))
         print(ppretty(message))
         print(f"ZOT: {ctx.author.id}")
