@@ -360,6 +360,7 @@ def main():
 
     args = parse_args()
     creds = get_credentials(args.credentials_file, args.environment)
+    args.creds = creds  # Store credentials in args
 
     if args.debug_queries:
         import logging
@@ -514,18 +515,39 @@ def main():
             return
 
         # Send initial response
-        response = await ctx.respond(f"{ctx.author.name}, here's the message id: {message.id}!", ephemeral=True)
+        response = await ctx.respond("Processing your request...", ephemeral=True)
         message_obj = await response.original_message()
 
-        # Get the message content
-        title = message.clean_content[:100]  # Truncate to 100 chars for title
-        body = message.clean_content
+        # Check if this message is a title or ongcode
+        ongcode = OngCode.get_or_none(
+            (OngCode.mainmsg_id == message.id) | (OngCode.titlemsg_id == message.id)
+        )
+
+        if ongcode is None:
+            await message_obj.edit(content="This message is not a recognized ongcode or title.")
+            return
+
+        # Get the title and body
+        if message.id == ongcode.titlemsg_id:
+            # This is a title message, so the body is in the main message
+            title = ongcode.titlemsg_text
+            body = ongcode.mainmsg_text
+        else:
+            # This is the main message, so we need to find the title
+            title = ongcode.titlemsg_text or "Untitled"
+            body = ongcode.mainmsg_text
+
+        # Get the codething endpoint from credentials
+        codething_endpoint = bot.botargs.creds.get("codething_endpoint")
+        if not codething_endpoint:
+            await message_obj.edit(content="Error: codething_endpoint not configured")
+            return
 
         # Send to codething backend
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.post(
-                    "http://localhost:8001/songs/",
+                    f"{codething_endpoint}/songs/",
                     json={
                         "title": title,
                         "body": body,
@@ -533,17 +555,17 @@ def main():
                     }
                 ) as response:
                     if response.status == 200:
-                        await message_obj.edit(content=f"{ctx.author.name}, here's the message id: {message.id}!\nSuccessfully sent ongcode to Jon!")
+                        await message_obj.edit(content=f"Successfully sent ongcode to Jon!\nTitle: {title}")
                     else:
-                        await message_obj.edit(content=f"{ctx.author.name}, here's the message id: {message.id}!\nFailed to send ongcode: {response.status}")
+                        await message_obj.edit(content=f"Failed to send ongcode: HTTP {response.status}")
             except Exception as e:
-                await message_obj.edit(content=f"{ctx.author.name}, here's the message id: {message.id}!\nError sending ongcode: {str(e)}")
+                await message_obj.edit(content=f"Error sending ongcode: {str(e)}")
 
         # Keep existing debug printing
-        print(ppretty(ctx))
-        print(ppretty(message))
-        print(f"ZOT: {ctx.author.id}")
-        print(f"ZOT: {message.author.id}")
+        # print(ppretty(ctx))
+        # print(ppretty(message))
+        # print(f"ZOT: {ctx.author.id}")
+        # print(f"ZOT: {message.author.id}")
 
 
     # A couple of testing things
