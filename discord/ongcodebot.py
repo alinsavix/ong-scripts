@@ -333,6 +333,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--ongcodething",
+        type=str,  # FIXME: Is there a "URL" type we can use?
+        default=None,
+        help="URL for ongcodething backend"
+    )
+
+    parser.add_argument(
         "--dbfile",
         type=Path,
         default=None,
@@ -360,7 +367,8 @@ def main():
 
     args = parse_args()
     creds = get_credentials(args.credentials_file, args.environment)
-    args.creds = creds  # Store credentials in args
+    # print(args)
+    # args.creds = creds  # Store credentials in args, can't figure out if this is stupid
 
     if args.debug_queries:
         import logging
@@ -369,21 +377,24 @@ def main():
         logger.setLevel(logging.DEBUG)
 
     if args.ongcode_guild is None:
-        args.ongcode_guild = creds.get("guild", None)
+        args.ongcode_guild = creds.get("guild")
 
     if args.ongcode_guild is None:
         log("ERROR: No guild specified and no guild in configuration")
         sys.exit(1)
 
     if args.ongcode_channel is None:
-        args.ongcode_channel = creds.get("channel", None)
+        args.ongcode_channel = creds.get("channel")
 
     if args.ongcode_channel is None:
         log("ERROR: No channel specified and no channel in configuration")
         sys.exit(1)
 
     if args.moderator_role is None:
-        args.moderator_role = creds.get("moderator_role", None)
+        args.moderator_role = creds.get("moderator_role")
+
+    if args.ongcodething is None:
+        args.ongcodething = creds.get("ongcodething")
 
     if args.dbfile is None:
         args.dbfile = Path(__file__).parent / f"ongcode_{args.environment}.db"
@@ -515,8 +526,8 @@ def main():
             return
 
         # Send initial response
-        response = await ctx.respond("Processing your request...", ephemeral=True)
-        message_obj = await response.original_message()
+        response = await ctx.respond("Sending...", ephemeral=True)
+        message_obj = await response.original_message()  # FIXME: deprecated
 
         # Check if this message is a title or ongcode
         ongcode = OngCode.get_or_none(
@@ -538,9 +549,9 @@ def main():
             body = ongcode.mainmsg_text
 
         # Get the ongcodething endpoint from credentials
-        ongcodething_endpoint = bot.botargs.creds.get("ongcodething_endpoint")
+        ongcodething_endpoint = bot.botargs.ongcodething
         if not ongcodething_endpoint:
-            await message_obj.edit(content="Error: ongcodething_endpoint not configured")
+            await message_obj.edit(content="Error: ongcodething endpoint not configured")
             return
 
         # Send to codething backend
