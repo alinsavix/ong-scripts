@@ -539,7 +539,7 @@ def main():
 
         # Get the ongcodething endpoint from credentials
         ongcodething_endpoint = bot.botargs.creds.get("ongcodething_endpoint")
-        if not codething_endpoint:
+        if not ongcodething_endpoint:
             await message_obj.edit(content="Error: ongcodething_endpoint not configured")
             return
 
