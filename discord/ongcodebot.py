@@ -537,17 +537,17 @@ def main():
             title = ongcode.titlemsg_text or "Untitled"
             body = ongcode.mainmsg_text
 
-        # Get the codething endpoint from credentials
-        codething_endpoint = bot.botargs.creds.get("codething_endpoint")
+        # Get the ongcodething endpoint from credentials
+        ongcodething_endpoint = bot.botargs.creds.get("ongcodething_endpoint")
         if not codething_endpoint:
-            await message_obj.edit(content="Error: codething_endpoint not configured")
+            await message_obj.edit(content="Error: ongcodething_endpoint not configured")
             return
 
         # Send to codething backend
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.post(
-                    f"{codething_endpoint}/songs/",
+                    f"{ongcodething_endpoint}/songs/",
                     json={
                         "title": title,
                         "body": body,
