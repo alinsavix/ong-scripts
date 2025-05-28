@@ -333,7 +333,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--ongcodething",
+        "--ongcodething-url", "--ongcodething",
         type=str,  # FIXME: Is there a "URL" type we can use?
         default=None,
         help="URL for ongcodething backend"
@@ -367,8 +367,6 @@ def main():
 
     args = parse_args()
     creds = get_credentials(args.credentials_file, args.environment)
-    # print(args)
-    # args.creds = creds  # Store credentials in args, can't figure out if this is stupid
 
     if args.debug_queries:
         import logging
@@ -393,8 +391,8 @@ def main():
     if args.moderator_role is None:
         args.moderator_role = creds.get("moderator_role")
 
-    if args.ongcodething is None:
-        args.ongcodething = creds.get("ongcodething")
+    if args.ongcodething_url is None:
+        args.ongcodething_url = creds.get("ongcodething_url")
 
     if args.dbfile is None:
         args.dbfile = Path(__file__).parent / f"ongcode_{args.environment}.db"
@@ -537,8 +535,8 @@ def main():
         body = ongcode.mainmsg_text
 
         # Get the ongcodething endpoint from credentials
-        ongcodething_endpoint = bot.botargs.ongcodething
-        if not ongcodething_endpoint:
+        ongcodething_url = bot.botargs.ongcodething_url
+        if not ongcodething_url:
             log("WARNING: ongcodething called but not configured")
             await message_obj.edit(content="Error: ongcodething endpoint not configured")
             return
@@ -547,7 +545,7 @@ def main():
         async with aiohttp.ClientSession() as session:
             try:
                 post_response = await session.post(
-                    f"{ongcodething_endpoint}/songs/",
+                    f"{ongcodething_url}/songs/",
                     json={
                         "title": title,
                         "body": body,
