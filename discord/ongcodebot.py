@@ -502,8 +502,6 @@ def main():
         if isinstance(error, discord.ext.commands.MissingRole):
             await ctx.respond("Permission denied", ephemeral=True)
 
-
-    # Message command for sending ongcode to Jon
     @bot.message_command(name="Send Ongcode to Jon")
     async def cmd_ongcode_send(
         ctx: discord.ApplicationContext, message: discord.Message
@@ -516,12 +514,7 @@ def main():
         if message.author.id == bot.user.id:
             return
 
-        if discord.utils.get(ctx.author.roles, name=bot.botargs.moderator_role):
-            is_mod = True
-        else:
-            is_mod = False
-
-        if not is_mod:
+        if not discord.utils.get(ctx.author.roles, name=bot.botargs.moderator_role):
             await ctx.respond("Permission denied", ephemeral=True)
             return
 
@@ -535,41 +528,41 @@ def main():
         )
 
         if ongcode is None:
+            log(f"WARNING: Bad message ({message.id}) requested for ongcodething send")
             await message_obj.edit(content="This message is not a recognized ongcode or title.")
             return
 
         # Get the title and body
-        if message.id == ongcode.titlemsg_id:
-            # This is a title message, so the body is in the main message
-            title = ongcode.titlemsg_text
-            body = ongcode.mainmsg_text
-        else:
-            # This is the main message, so we need to find the title
-            title = ongcode.titlemsg_text or "Untitled"
-            body = ongcode.mainmsg_text
+        title = ongcode.titlemsg_text or "Untitled"
+        body = ongcode.mainmsg_text
 
         # Get the ongcodething endpoint from credentials
         ongcodething_endpoint = bot.botargs.ongcodething
         if not ongcodething_endpoint:
+            log("WARNING: ongcodething called but not configured")
             await message_obj.edit(content="Error: ongcodething endpoint not configured")
             return
 
         # Send to codething backend
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.post(
+                post_response = await session.post(
                     f"{ongcodething_endpoint}/songs/",
                     json={
                         "title": title,
                         "body": body,
                         "status": "PENDING"
                     }
-                ) as response:
-                    if response.status == 200:
-                        await message_obj.edit(content=f"Successfully sent ongcode to Jon!\nTitle: {title}")
-                    else:
-                        await message_obj.edit(content=f"Failed to send ongcode: HTTP {response.status}")
+                )
+                if post_response.status == 200:
+                    log(f"INFO: Successfully sent ongcode to Jon! (id {ongcode.mainmsg_id} / Title: {title}")
+                    await message_obj.edit(content=f"Successfully sent ongcode to Jon!\nTitle: {title}")
+                else:
+                    log(f"ERROR: Failed to send ongcode: HTTP {post_response.status}")
+                    await message_obj.edit(content=f"Failed to send ongcode: HTTP {post_response.status}")
             except Exception as e:
+                log(f"WARNING: Error sending ongcode to Jon! (id {ongcode.mainmsg_id} / Title: {title})")
+                log(f"WARNING: {str(e)}")
                 await message_obj.edit(content=f"Error sending ongcode: {str(e)}")
 
         # Keep existing debug printing
@@ -580,24 +573,24 @@ def main():
 
 
     # A couple of testing things
-    class MyModal(discord.ui.Modal):
-        def __init__(self, *args, **kwargs) -> None:
-            super().__init__(*args, **kwargs)
+    # class MyModal(discord.ui.Modal):
+    #     def __init__(self, *args, **kwargs) -> None:
+    #         super().__init__(*args, **kwargs)
 
-            self.add_item(discord.ui.InputText(label="Short Input"))
-            self.add_item(discord.ui.InputText(
-                label="Long Input", style=discord.InputTextStyle.long))
+    #         self.add_item(discord.ui.InputText(label="Short Input"))
+    #         self.add_item(discord.ui.InputText(
+    #             label="Long Input", style=discord.InputTextStyle.long))
 
-        async def callback(self, interaction: discord.Interaction):
-            embed = discord.Embed(title="Modal Results")
-            embed.add_field(name="Short Input", value=self.children[0].value)
-            embed.add_field(name="Long Input", value=self.children[1].value)
-            await interaction.response.send_message(embeds=[embed])
+    #     async def callback(self, interaction: discord.Interaction):
+    #         embed = discord.Embed(title="Modal Results")
+    #         embed.add_field(name="Short Input", value=self.children[0].value)
+    #         embed.add_field(name="Long Input", value=self.children[1].value)
+    #         await interaction.response.send_message(embeds=[embed])
 
-    class MyView(discord.ui.View):
-        @discord.ui.button(label="Send Modal")
-        async def button_callback(self, button, interaction):
-            await interaction.response.send_modal(MyModal(title="Modal via Button"))
+    # class MyView(discord.ui.View):
+    #     @discord.ui.button(label="Send Modal")
+    #     async def button_callback(self, button, interaction):
+    #         await interaction.response.send_modal(MyModal(title="Modal via Button"))
 
     # @bot.slash_command()
     # async def send_modal(ctx):
@@ -605,9 +598,9 @@ def main():
 
     # creates a global message command. use guild_ids=[] to create guild-specific commands.
     # @bot.message_command(name="interaction_test")
-    async def interaction_test(ctx, message: discord.Message):  # message commands return the message
-        modal = MyModal(title="Modal via Message Command")
-        await ctx.send_modal(modal)
+    # async def interaction_test(ctx, message: discord.Message):  # message commands return the message
+    #     modal = MyModal(title="Modal via Message Command")
+    #     await ctx.send_modal(modal)
 
 
     bot.run(creds["token"])
