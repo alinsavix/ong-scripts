@@ -12,6 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import aiohttp
 import toml
 from more_itertools import ichunked
 from peewee import (SQL, AutoField, BigIntegerField, CharField, DateTimeField,
@@ -332,6 +333,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--ongcodething-url", "--ongcodething",
+        type=str,  # FIXME: Is there a "URL" type we can use?
+        default=None,
+        help="URL for ongcodething backend"
+    )
+
+    parser.add_argument(
         "--dbfile",
         type=Path,
         default=None,
@@ -367,21 +375,24 @@ def main():
         logger.setLevel(logging.DEBUG)
 
     if args.ongcode_guild is None:
-        args.ongcode_guild = creds.get("guild", None)
+        args.ongcode_guild = creds.get("guild")
 
     if args.ongcode_guild is None:
         log("ERROR: No guild specified and no guild in configuration")
         sys.exit(1)
 
     if args.ongcode_channel is None:
-        args.ongcode_channel = creds.get("channel", None)
+        args.ongcode_channel = creds.get("channel")
 
     if args.ongcode_channel is None:
         log("ERROR: No channel specified and no channel in configuration")
         sys.exit(1)
 
     if args.moderator_role is None:
-        args.moderator_role = creds.get("moderator_role", None)
+        args.moderator_role = creds.get("moderator_role")
+
+    if args.ongcodething_url is None:
+        args.ongcodething_url = creds.get("ongcodething_url")
 
     if args.dbfile is None:
         args.dbfile = Path(__file__).parent / f"ongcode_{args.environment}.db"
@@ -489,25 +500,95 @@ def main():
         if isinstance(error, discord.ext.commands.MissingRole):
             await ctx.respond("Permission denied", ephemeral=True)
 
+    @bot.message_command(name="Send Ongcode to Jon")
+    async def cmd_ongcode_send(
+        ctx: discord.ApplicationContext, message: discord.Message
+    ):
+        # Right channel?
+        if message.channel.id != bot.botchannel.id:
+            return
+
+        # Not me?
+        if message.author.id == bot.user.id:
+            return
+
+        if not discord.utils.get(ctx.author.roles, name=bot.botargs.moderator_role):
+            await ctx.respond("Permission denied", ephemeral=True)
+            return
+
+        # Send initial response
+        response = await ctx.respond("Sending...", ephemeral=True)
+        message_obj = await response.original_message()  # FIXME: deprecated
+
+        # Check if this message is a title or ongcode
+        ongcode = OngCode.get_or_none(
+            (OngCode.mainmsg_id == message.id) | (OngCode.titlemsg_id == message.id)
+        )
+
+        if ongcode is None:
+            log(f"WARNING: Bad message ({message.id}) requested for ongcodething send")
+            await message_obj.edit(content="This message is not a recognized ongcode or title.")
+            return
+
+        # Get the title and body
+        title = ongcode.titlemsg_text or "Untitled"
+        body = ongcode.mainmsg_text
+
+        # Get the ongcodething endpoint from credentials
+        ongcodething_url = bot.botargs.ongcodething_url
+        if not ongcodething_url:
+            log("WARNING: ongcodething called but not configured")
+            await message_obj.edit(content="Error: ongcodething endpoint not configured")
+            return
+
+        # Send to codething backend
+        async with aiohttp.ClientSession() as session:
+            try:
+                post_response = await session.post(
+                    f"{ongcodething_url}/songs/",
+                    json={
+                        "title": title,
+                        "body": body,
+                        "status": "PENDING"
+                    }
+                )
+                if post_response.status == 200:
+                    log(f"INFO: Successfully sent ongcode to Jon! (id {ongcode.mainmsg_id} / Title: {title}")
+                    await message_obj.edit(content=f"Successfully sent ongcode to Jon!\nTitle: {title}")
+                else:
+                    log(f"ERROR: Failed to send ongcode: HTTP {post_response.status}")
+                    await message_obj.edit(content=f"Failed to send ongcode: HTTP {post_response.status}")
+            except Exception as e:
+                log(f"WARNING: Error sending ongcode to Jon! (id {ongcode.mainmsg_id} / Title: {title})")
+                log(f"WARNING: {str(e)}")
+                await message_obj.edit(content=f"Error sending ongcode: {str(e)}")
+
+        # Keep existing debug printing
+        # print(ppretty(ctx))
+        # print(ppretty(message))
+        # print(f"ZOT: {ctx.author.id}")
+        # print(f"ZOT: {message.author.id}")
+
+
     # A couple of testing things
-    class MyModal(discord.ui.Modal):
-        def __init__(self, *args, **kwargs) -> None:
-            super().__init__(*args, **kwargs)
+    # class MyModal(discord.ui.Modal):
+    #     def __init__(self, *args, **kwargs) -> None:
+    #         super().__init__(*args, **kwargs)
 
-            self.add_item(discord.ui.InputText(label="Short Input"))
-            self.add_item(discord.ui.InputText(
-                label="Long Input", style=discord.InputTextStyle.long))
+    #         self.add_item(discord.ui.InputText(label="Short Input"))
+    #         self.add_item(discord.ui.InputText(
+    #             label="Long Input", style=discord.InputTextStyle.long))
 
-        async def callback(self, interaction: discord.Interaction):
-            embed = discord.Embed(title="Modal Results")
-            embed.add_field(name="Short Input", value=self.children[0].value)
-            embed.add_field(name="Long Input", value=self.children[1].value)
-            await interaction.response.send_message(embeds=[embed])
+    #     async def callback(self, interaction: discord.Interaction):
+    #         embed = discord.Embed(title="Modal Results")
+    #         embed.add_field(name="Short Input", value=self.children[0].value)
+    #         embed.add_field(name="Long Input", value=self.children[1].value)
+    #         await interaction.response.send_message(embeds=[embed])
 
-    class MyView(discord.ui.View):
-        @discord.ui.button(label="Send Modal")
-        async def button_callback(self, button, interaction):
-            await interaction.response.send_modal(MyModal(title="Modal via Button"))
+    # class MyView(discord.ui.View):
+    #     @discord.ui.button(label="Send Modal")
+    #     async def button_callback(self, button, interaction):
+    #         await interaction.response.send_modal(MyModal(title="Modal via Button"))
 
     # @bot.slash_command()
     # async def send_modal(ctx):
@@ -515,9 +596,9 @@ def main():
 
     # creates a global message command. use guild_ids=[] to create guild-specific commands.
     # @bot.message_command(name="interaction_test")
-    async def interaction_test(ctx, message: discord.Message):  # message commands return the message
-        modal = MyModal(title="Modal via Message Command")
-        await ctx.send_modal(modal)
+    # async def interaction_test(ctx, message: discord.Message):  # message commands return the message
+    #     modal = MyModal(title="Modal via Message Command")
+    #     await ctx.send_modal(modal)
 
 
     bot.run(creds["token"])
