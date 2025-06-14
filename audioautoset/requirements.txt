@@ -1,0 +1,6 @@
+# Need the dev version of this, would be nice if they'd merge it, heh
+https://github.com/AndreMiras/pycaw/archive/develop.zip
+
+# Other bits
+pyinstaller
+tdvutil
