@@ -2,5 +2,8 @@
 https://github.com/AndreMiras/pycaw/archive/develop.zip
 
 # Other bits
-pyinstaller
 tdvutil
+
+# for packaging
+pyinstaller
+pillow

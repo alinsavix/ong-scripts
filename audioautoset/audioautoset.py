@@ -30,8 +30,10 @@
 # output capture source -> output device
 # monitor -> output device
 
+import argparse
 import configparser
 import json
+import msvcrt
 import shutil
 import sys
 import warnings
@@ -43,19 +45,41 @@ from pycaw.pycaw import AudioUtilities
 from pycaw.utils import AudioDevice
 from tdvutil import ppretty
 
+OBS_DIR = Path("C:/obs/OBS 30.1.2-1")
+OBS_PROFILE = "MainJon"
+# OBS_PROFILE = "Untitled"
+OBS_SCENE_COLLECTION = "OngMain2024Rework"
+
+# the maps are "if you see the device on the left, assign it the first OBS
+# source on the right that exists".
 INPUT_MAP = {
-    "Steinberg UR44": ["UR44 Audio"],
-    # don't use the VR-4HD for input, but may as well maintain it
-    "VR-4HD(Audio)": ["VR4HD Audio [maybe]"],
+    # Jon's bits
+    "Line (Steinberg UR44)": ["UR44 Audio"],
+    "VR-4HD(Audio)  (VR-4HD(Audio))": ["VR4HD Audio [maybe]"],   # not used, but set it anyhow
+
+    # Alinsa's bits, for testing
     "Chat Mic (TC-Helicon GoXLR)": ["UR44 Audio"],
 }
 
 OUTPUT_CAPTURE_MAP = {
-    "USB Audio CODEC": ["nightbot"],
+    # Jon's
+    "Speakers (USB Audio CODEC )": ["nightbot"],
+
+    # Alinsa's
     "System (TC-Helicon GoXLR)": ["nightbot"],
 }
 
-MONITOR_DEVICE = ["VR-4HD(Audio)", "Game (TC-Helicon GoXLR)"]
+# A little different from the above, since the monitoring device is actually
+# stored in the profile, not the scene collection, and there's only one of
+# that target device.
+MONITOR_DEVICES = [
+    "Speakers (VR-4HD(Audio))",
+    "Game (TC-Helicon GoXLR)",
+]
+
+
+def get_default_output_device():
+    return AudioUtilities.GetSpeakers()
 
 
 def get_active_output_devices():
@@ -70,15 +94,14 @@ def get_active_input_devices():
         return AudioUtilities.GetAllDevices(data_flow=EDataFlow.eCapture.value,
                                             device_state=DEVICE_STATE.ACTIVE.value)
 
-def get_default_output_device():
-    return AudioUtilities.GetSpeakers()
-
 def get_default_input_device():
     return AudioUtilities.GetMicrophone()
 
-def set_default_device(device: AudioDevice):
-    AudioUtilities.SetDefaultDevice(device.id)
+# def set_default_device(device: AudioDevice):
+#     AudioUtilities.SetDefaultDevice(device.id)
 
+
+# scene collection wrangling
 def load_scene_collection(file: Path) -> dict:
     try:
         with open(file, 'r') as f:
@@ -110,6 +133,15 @@ def save_scene_collection(file: Path, scene_collection: dict):
         print(f"Error saving scene collection: {e}")
         raise
 
+def find_source_by_name(sc: dict, sourcename: str) -> dict:
+    for source in sc.get("sources", []):
+        if source.get("name") == sourcename:
+            return source
+    print(f"Source '{sourcename}' not found in scene collection.")
+    return None
+
+
+# profile wrangling
 def load_profile(file: Path) -> dict:
     try:
         # Disable interpolation to handle % characters in values
@@ -159,107 +191,109 @@ def save_profile(file: Path, profile: dict):
         raise
 
 
-def find_source_by_name(sc: dict, sourcename: str) -> dict:
-    for source in sc.get("sources", []):
-        if source.get("name") == sourcename:
-            return source
-    print(f"Source '{sourcename}' not found in scene collection.")
-    return None
+
+def go():
+    parser = argparse.ArgumentParser(description="OBS Audio Device Configuration Tool")
+    parser.add_argument("--dryrun", default=True, action="store_true", help="Show what would be done without making changes")
+    args = parser.parse_args()
+
+    print("OBS AUDIO DEVICE UN-FUCKER")
+
+    sc_path = OBS_DIR / "config/obs-studio/basic/scenes" / f"{OBS_SCENE_COLLECTION}.json"
+    prof_path = OBS_DIR / "config/obs-studio/basic/profiles" / OBS_PROFILE / "basic.ini"
+
+    sc = load_scene_collection(sc_path)
+    print(f"Loaded scene collection from {sc_path} with {len(sc.get('sources', []))} sources")
+
+    prof = load_profile(prof_path)
+    print(f"Loaded profile from {prof_path}")
+
+    final_devices = []
+
+    print("\nFINDING INPUTS:")
+    active_input_devices = get_active_input_devices()
+
+    for device in active_input_devices:
+        if device.FriendlyName in INPUT_MAP:
+            d = INPUT_MAP[device.FriendlyName]
+            id = device.id
+            # print(f"map {d} to {device.FriendlyName} (id: {id})")
+
+            for sourcename in d:
+                source = find_source_by_name(sc, sourcename)
+                if source is not None:
+                    print(f"INFO: Found {device.FriendlyName}: Assigning to source {source['name']}")
+                    source["settings"]["device_id"] = device.id
+                    final_devices.append(f"{source['name']} <- {device.FriendlyName} (id: {id})")
+                    break
+            else:
+                print(f"WARNING: Found {device.FriendlyName}, but no matching sources found in OBS")
+        else:
+            print(f"DEBUG: Found {device.FriendlyName}: Not listed, ignoring")
 
 
-if __name__ == "__main__":
-    # List devices
-    print("List of available output devices (* = default): ")
+    print("\nFINDING OUTPUTS:")
     active_output_devices = get_active_output_devices()
-    default_output_device = get_default_output_device()
 
-    sc_name = Path("OngMain2024Rework.json")
-    prof_name = Path("profile_basic.ini")
-
-    sc = load_scene_collection(sc_name)
-    prof = load_profile(prof_name)
-
-    from tdvutil import ppretty
-
-    # print(ppretty(prof))
-
+    # FIXME: DRY
     for device in active_output_devices:
         if device.FriendlyName in OUTPUT_CAPTURE_MAP:
             d = OUTPUT_CAPTURE_MAP[device.FriendlyName]
             id = device.id
-            print(f"map {d} to {device.FriendlyName} (id: {id})")
+            # print(f"map {d} to {device.FriendlyName} (id: {id})")
 
             for sourcename in d:
                 source = find_source_by_name(sc, sourcename)
                 if source is not None:
-                    print(f"Updating source {source['name']}: {source['settings']['device_id']} -> {id}")
+                    print(f"INFO: Found {device.FriendlyName}: Assigning to source {source['name']}")
                     source["settings"]["device_id"] = device.id
-    # for device in active_output_devices:
-    #     if device.id == default_output_device.id:
-    #         print(f" * {device.FriendlyName}")
-    #     else:
-    #         print(f"   {device.FriendlyName}")
+                    final_devices.append(f"{source['name']} <- (output catpure) {device.FriendlyName} (id: {id})")
+                    break
+            else:
+                print(f"WARNING: Found {device.FriendlyName}, but no matching sources found in OBS")
+        else:
+            print(f"DEBUG: Found {device.FriendlyName}: Not listed, ignoring")
 
 
-    print("\nList of available input devices (* = default): ")
-    active_input_devices = get_active_input_devices()
-    default_input_device = get_default_input_device()
-
-    # print(dir(default_input_device))
-
-    for device in active_input_devices:
-        # print(f"{device.FriendlyName} (id: {device.id})")
-        if device.FriendlyName in INPUT_MAP:
-            d = INPUT_MAP[device.FriendlyName]
-            id = device.id
-            print(f"map {d} to {device.FriendlyName} (id: {id})")
-
-            for sourcename in d:
-                source = find_source_by_name(sc, sourcename)
-                if source is not None:
-                    print(f"Updating source {source['name']}: {source['settings']['device_id']} -> {id}")
-                    source["settings"]["device_id"] = device.id
+    print("\nFINDING MONITORING DEVICE:")
 
     # FIXME: DRY
     for device in active_output_devices:
-        if device.FriendlyName in MONITOR_DEVICE:
+        if device.FriendlyName in MONITOR_DEVICES:
             d = device.FriendlyName
             id = device.id
-            print(f"map {d} to {device.FriendlyName} (id: {id})")
+            print(f"INFO: Found {device.FriendlyName}: Assigning as monitoring device")
 
-            print(f"Updating monitoring device to {id}")
             prof["Audio"]["MonitoringDeviceId"] = id
             prof["Audio"]["MonitoringDeviceName"] = device.FriendlyName
-
-    save_scene_collection(sc_name, sc)
-    save_profile(prof_name, prof)
-
-        # if device.id == default_input_device.id:
-        #     print(f" * {device.FriendlyName}")
-        # else:
-        #     print(f"   {device.FriendlyName}")
-
-    sys.exit(0)
-
-    other_device = None
-    for device in active_output_devices:
-        if device.id == default_device.id:
-            print(f" * {device.FriendlyName}")
+            final_devices.append(f"MONITOR -> {device.FriendlyName} (id: {id})")
+            break
         else:
-            print(f"   {device.FriendlyName}")
-            other_device = device
+            print(f"DEBUG: Found {device.FriendlyName}: Not listed, ignoring")
+    else:
+        print(f"WARNING: No monitoring device found")
 
-    if other_device is not None:
-        # Change default to other device
-        print(f"Changing default device to {other_device.FriendlyName}...")
-        # set_default_device(other_device)
+    if args.dryrun:
+        print("\nDRY RUN - No changes will be saved")
+    else:
+        save_scene_collection(sc_path, sc)
+        save_profile(prof_path, prof)
 
-        # List devices again
-        print("Updated list of available output devices (* = default): ")
-        active_output_devices = get_active_output_devices()
-        default_device = get_default_output_device()
-        for device in active_output_devices:
-            if device.id == default_device.id:
-                print(f"* {device.FriendlyName}")
-            else:
-                print(f"  {device.FriendlyName}")
+    print("\n\n===== FINAL DEVICE ASSIGNMENTS =====")
+    for assignment in final_devices:
+        print(f"  {assignment}")
+
+    # if device.id == default_input_device.id:
+    #     print(f" * {device.FriendlyName}")
+    # else:
+    #     print(f"   {device.FriendlyName}")
+
+
+if __name__ == "__main__":
+    try:
+        go()
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+    print("\n\nPress any key to end...")
+    msvcrt.getch()  # Waits for a keypress
