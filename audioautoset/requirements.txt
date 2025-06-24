@@ -3,6 +3,7 @@ https://github.com/AndreMiras/pycaw/archive/develop.zip
 
 # Other bits
 tdvutil
+toml
 
 # for packaging
 pyinstaller
