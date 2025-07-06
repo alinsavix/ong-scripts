@@ -1,7 +1,7 @@
 block_cipher = None
 
 a = Analysis(
-    ['audioautoset.py'],
+    ['audiounfuck.py'],
     pathex=[],
     binaries=[],
     datas=[("icons8-audio-100.png", "icons8-audio-100.png")],
@@ -24,7 +24,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='audioautoset',
+    name='audiounfuck',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

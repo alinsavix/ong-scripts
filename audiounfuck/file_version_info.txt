@@ -30,12 +30,12 @@ VSVersionInfo(
       StringTable(
         '040904b0',
         [StringStruct('CompanyName', 'TDV Alinsa'),
-        StringStruct('FileDescription', 'Audio AutoSet'),
+        StringStruct('FileDescription', 'OBS Audio Unfucker'),
         StringStruct('FileVersion', '0.0.1'),
-        StringStruct('InternalName', 'audioautoset'),
+        StringStruct('InternalName', 'audiounfuck'),
         StringStruct('LegalCopyright', 'Copyright © 2025 TDV Alinsa'),
         StringStruct('OriginalFilename', ''),
-        StringStruct('ProductName', 'Audio AutoSet'),
+        StringStruct('ProductName', 'OBS Audio Unfucker'),
         StringStruct('ProductVersion', '0.0.1'),
         StringStruct('SquirrelAwareVersion', '0'),
         StringStruct('', '')])

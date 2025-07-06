@@ -42,7 +42,7 @@ import sys
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import toml
 from pycaw.constants import DEVICE_STATE, EDataFlow
@@ -53,30 +53,30 @@ from tdvutil import ppretty
 
 # return the directory the script is in, be it in a pyinstaller bundle, or
 # as a normal Python script
-def get_basedir():
+def get_basedir() -> Path:
     if getattr(sys, 'frozen', False):
         return Path(sys.executable).parent
     else:
         return Path(__file__).resolve().parent
 
 
-def get_default_output_device():
+def get_default_output_device() -> AudioDevice:
     return AudioUtilities.GetSpeakers()
 
 
-def get_active_output_devices():
+def get_active_output_devices() -> List[AudioDevice]:
     with warnings.catch_warnings():  # suppress COMError warnings
         warnings.simplefilter("ignore", UserWarning)
         return AudioUtilities.GetAllDevices(data_flow=EDataFlow.eRender.value,
                                             device_state=DEVICE_STATE.ACTIVE.value)
 
-def get_active_input_devices():
+def get_active_input_devices() -> List[AudioDevice]:
     with warnings.catch_warnings():  # suppress COMError warnings
         warnings.simplefilter("ignore", UserWarning)
         return AudioUtilities.GetAllDevices(data_flow=EDataFlow.eCapture.value,
                                             device_state=DEVICE_STATE.ACTIVE.value)
 
-def get_default_input_device():
+def get_default_input_device() -> AudioDevice:
     return AudioUtilities.GetMicrophone()
 
 # def set_default_device(device: AudioDevice):
@@ -84,11 +84,11 @@ def get_default_input_device():
 
 
 # scene collection wrangling
-def load_scene_collection(file: Path) -> dict:
+def load_scene_collection(file: Path) -> Dict[str, Any]:
     try:
         with open(file, 'r', encoding='utf-8') as f:
             scene_collection = json.load(f)
-        return scene_collection
+        return cast(Dict[str, Any], scene_collection)
     except FileNotFoundError:
         lg.error(f"Error: Scene collection file not found: {file}")
         raise
@@ -97,7 +97,7 @@ def load_scene_collection(file: Path) -> dict:
         raise
 
 
-def save_scene_collection(file: Path, scene_collection: dict):
+def save_scene_collection(file: Path, scene_collection: dict) -> None:
     try:
         if file.exists():
             bak_dir = file.parent / "bak"
@@ -117,7 +117,7 @@ def save_scene_collection(file: Path, scene_collection: dict):
         raise
 
 
-def find_source_by_name(sc: dict, sourcename: str) -> dict:
+def find_source_by_name(sc: dict, sourcename: str) -> Optional[dict]:
     for source in sc.get("sources", []):
         if source.get("name") == sourcename:
             return source
@@ -150,7 +150,7 @@ def load_profile(file: Path) -> dict:
         raise
 
 
-def save_profile(file: Path, profile: dict):
+def save_profile(file: Path, profile: dict) -> None:
     try:
         if file.exists():
             bak_dir = file.parent / "bak"
@@ -206,8 +206,8 @@ def load_config(config_path: Path, hostname: str = None) -> dict:
         raise
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="OBS Audio Device Configuration Tool")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="OBS Audio Device Configuration Unfucker")
 
     parser.add_argument(
         "--dryrun",
@@ -225,13 +225,13 @@ def parse_args():
     parser.add_argument(
         "--config",
         default=None,
-        help="Configuration file to use (default: audioautoset.conf in script directory)"
+        help="Configuration file to use (default: audiounfuck.conf in script directory)"
     )
 
     return parser.parse_args()
 
 
-def autoset(force_debug: bool = False) -> Tuple[int, int]:
+def unfuck(force_debug: bool = False) -> Tuple[int, int]:
     args = parse_args()
 
     # logformat = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
@@ -255,9 +255,9 @@ def autoset(force_debug: bool = False) -> Tuple[int, int]:
 
     # Determine config file path
     if args.config is None:
-        # Use audioautoset.conf in script directory
+        # Use audiounfuck.conf in script directory
         script_dir = get_basedir()
-        config_path = script_dir / "audioautoset.conf"
+        config_path = script_dir / "audiounfuck.conf"
     else:
         config_path = Path(args.config)
 
@@ -406,7 +406,7 @@ if __name__ == "__main__":
     # except Exception as e:
     #     lg.error(f"An error occurred: {e}")
     #     sys.exit(1)
-    scene_changes, profile_changes = autoset()
+    scene_changes, profile_changes = unfuck()
 
     if not any([scene_changes, profile_changes]):
         # print("\nNo changes were made. Exiting.")
@@ -416,7 +416,7 @@ if __name__ == "__main__":
     keypress = msvcrt.getch()  # Waits for a keypress
 
     if keypress.decode('utf-8') == "d":
-        autoset(force_debug=True)
+        unfuck(force_debug=True)
 
         print("\n\nPress any key to end...")
         keypress = msvcrt.getch()  # Waits for a keypress

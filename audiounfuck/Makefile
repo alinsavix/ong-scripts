@@ -1,5 +1,5 @@
 PYINSTALLER_BIN ?= pyinstaller
-SPEC ?= audioautoset.spec
+SPEC ?= audiounfuck.spec
 
 .PHONY: dist
 dist:

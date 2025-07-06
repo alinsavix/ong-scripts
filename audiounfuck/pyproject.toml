@@ -1,5 +1,5 @@
 [project]
-name = "audioautoset"
+name = "audiounfuck"
 version = "0.0.0"
 authors = [ { name = "TDV Alinsa", email = "alinsa-github@lupine.org" } ]
 description = "Figure out where windows hid our audio devices THIS time, and update OBS to match"
