@@ -42,6 +42,7 @@ import sys
 import warnings
 from datetime import datetime
 from pathlib import Path
+from typing import Tuple
 
 import toml
 from pycaw.constants import DEVICE_STATE, EDataFlow
@@ -89,10 +90,10 @@ def load_scene_collection(file: Path) -> dict:
             scene_collection = json.load(f)
         return scene_collection
     except FileNotFoundError:
-        print(f"Error: Scene collection file not found: {file}")
+        lg.error(f"Error: Scene collection file not found: {file}")
         raise
     except json.JSONDecodeError as e:
-        print(f"Error: Invalid JSON in scene collection file: {e}")
+        lg.error(f"Error: Invalid JSON in scene collection file: {e}")
         raise
 
 
@@ -104,15 +105,15 @@ def save_scene_collection(file: Path, scene_collection: dict):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = bak_dir / f"{file.stem}_backup_{timestamp}{file.suffix}"
             shutil.copy2(file, backup_path)
-            print(f"Created scene collection backup at: {backup_path}")
+            print(f"    Created scene collection backup at: {backup_path}")
 
         # Save the new scene collection
         with open(file, 'w') as f:
             json.dump(scene_collection, f, indent=2)
-        print(f"Updated scene collection saved to: {file}")
+        print(f"    Updated scene collection saved to: {file}")
 
     except OSError as e:
-        print(f"Error saving scene collection: {e}")
+        lg.error(f"Error saving scene collection: {e}")
         raise
 
 
@@ -120,15 +121,17 @@ def find_source_by_name(sc: dict, sourcename: str) -> dict:
     for source in sc.get("sources", []):
         if source.get("name") == sourcename:
             return source
-    print(f"Source '{sourcename}' not found in scene collection.")
+    lg.debug(f"Source '{sourcename}' not found in scene collection.")
     return None
 
 
 # profile wrangling
+# FIXME: Do we actually need to convert this to a dict?
 def load_profile(file: Path) -> dict:
     try:
         # Disable interpolation to handle % characters in values
         config = configparser.ConfigParser(interpolation=None)
+        config.optionxform=str  # don't lowercase keys
         # Explicitly open with UTF-8 encoding to handle BOM
         with open(file, 'r', encoding='utf-8-sig') as f:
             config.read_file(f)
@@ -140,10 +143,10 @@ def load_profile(file: Path) -> dict:
 
         return profile_dict
     except FileNotFoundError:
-        print(f"Error: Profile file not found: {file}")
+        lg.error(f"Error: Profile file not found: {file}")
         raise
     except configparser.Error as e:
-        print(f"Error: Invalid INI file format in profile: {e}")
+        lg.error(f"Error: Invalid INI file format in profile: {e}")
         raise
 
 
@@ -155,9 +158,10 @@ def save_profile(file: Path, profile: dict):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = bak_dir / f"{file.stem}_backup_{timestamp}{file.suffix}"
             shutil.copy2(file, backup_path)
-            print(f"Created profile backup at: {backup_path}")
+            print(f"    Created profile backup at: {backup_path}")
 
         config = configparser.ConfigParser(interpolation=None)
+        config.optionxform = str  # don't lowercase keys
 
         # Convert the dictionary to a config object
         for section, options in profile.items():
@@ -165,13 +169,14 @@ def save_profile(file: Path, profile: dict):
             for option, value in options.items():
                 config[section][option] = value
 
-        # Save the profile to the file
-        with open(file, 'w') as f:
-            config.write(f)
-        print(f"Profile saved to: {file}")
+        # Save the profile to the file. Make it look like it does when OBS
+        # writes it -- no spaces around delimiters, only newlines for eol
+        with open(file, 'w', newline="\n") as f:
+            config.write(f, space_around_delimiters=False)
+        print(f"    Profile saved to: {file}")
 
     except OSError as e:
-        print(f"Error saving profile: {e}")
+        lg.error(f"Error saving profile: {e}")
         raise
 
 
@@ -226,7 +231,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def autoset(force_debug: bool = False):
+def autoset(force_debug: bool = False) -> Tuple[int, int]:
     args = parse_args()
 
     # logformat = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
@@ -260,9 +265,11 @@ def autoset(force_debug: bool = False):
         lg.error(f"Configuration file not found: {config_path}")
         sys.exit(1)
 
-    print(f"Using config file: {config_path}")
+    lg.info(f"Using config file: {config_path}")
     config = load_config(config_path, hostname)
 
+    scene_changes = 0
+    profile_changes = 0
 
     # Extract configuration values
     obs_dir = Path(config['obs_directory'])
@@ -281,6 +288,9 @@ def autoset(force_debug: bool = False):
     prof = load_profile(prof_path)
     lg.info(f"Loaded profile from {prof_path}")
 
+
+    print("\n===== FINDING DEVICE ASSIGNMENTS =====")
+
     final_devices = []
 
     print("\nFINDING INPUTS:")
@@ -295,14 +305,19 @@ def autoset(force_debug: bool = False):
             for sourcename in d:
                 source = find_source_by_name(sc, sourcename)
                 if source is not None:
-                    print(f"Found {device.FriendlyName}: Assigning to source {source['name']}")
-                    source["settings"]["device_id"] = device.id
-                    final_devices.append(f"{source['name']} <- {device.FriendlyName} (id: {id})")
+                    if source["settings"]["device_id"] != device.id:
+                        print(f"  Found {device.FriendlyName}: Assigning to source {source['name']}")
+                        source["settings"]["device_id"] = device.id
+                        final_devices.append(f"CHANGED: {source['name']} <- {device.FriendlyName} (id: {id})")
+                        scene_changes += 1
+                    else:
+                        print(f"  Found {device.FriendlyName}: Already assigned to {source['name']}")
+                        final_devices.append(f"UNCHANGED: {source['name']} <- {device.FriendlyName} (id: {id})")
                     break
             else:
                 lg.warning(f"Found input {device.FriendlyName}, but no matching sources found in OBS")
         else:
-            lg.debug(f"DEBUG: Found {device.FriendlyName}: Not listed, ignoring")
+            lg.debug(f"Found {device.FriendlyName}: Not listed, ignoring")
 
 
     print("\nFINDING OUTPUTS:")
@@ -318,9 +333,14 @@ def autoset(force_debug: bool = False):
             for sourcename in d:
                 source = find_source_by_name(sc, sourcename)
                 if source is not None:
-                    print(f"Found {device.FriendlyName}: Assigning to source {source['name']}")
-                    source["settings"]["device_id"] = device.id
-                    final_devices.append(f"{source['name']} <- (output catpure) {device.FriendlyName} (id: {id})")
+                    if source["settings"]["device_id"] != device.id:
+                        print(f"  Found {device.FriendlyName}: Assigning to source {source['name']}")
+                        source["settings"]["device_id"] = device.id
+                        final_devices.append(f"CHANGED: {source['name']} <- (output catpure) {device.FriendlyName} (id: {id})")
+                        scene_changes += 1
+                    else:
+                        print(f"  Found {device.FriendlyName}: Already assigned to {source['name']}")
+                        final_devices.append(f"UNCHANGED: {source['name']} <- (output catpure) {device.FriendlyName} (id: {id})")
                     break
             else:
                 lg.warning(f"Found output {device.FriendlyName}, but no matching sources found in OBS")
@@ -333,29 +353,46 @@ def autoset(force_debug: bool = False):
     # FIXME: DRY
     for device in active_output_devices:
         if device.FriendlyName in monitor_devices:
-            d = device.FriendlyName
-            id = device.id
-            print(f"Found {device.FriendlyName}: Assigning as monitoring device")
+            if prof["Audio"]["MonitoringDeviceId"] != device.id:
+                print(f"  Found {device.FriendlyName}: Assigning as monitoring device")
 
-            prof["Audio"]["MonitoringDeviceId"] = id
-            prof["Audio"]["MonitoringDeviceName"] = device.FriendlyName
-            final_devices.append(f"MONITOR -> {device.FriendlyName} (id: {id})")
+                prof["Audio"]["MonitoringDeviceId"] = device.id
+                prof["Audio"]["MonitoringDeviceName"] = device.FriendlyName
+                final_devices.append(f"CHANGED: MONITOR -> {device.FriendlyName} (id: {device.id})")
+                profile_changes += 1
+            else:
+                print(f"  Found {device.FriendlyName}: Already assigned as monitoring device")
+                final_devices.append(f"UNCHANGED: MONITOR -> {device.FriendlyName} (id: {device.id})")
             break
         else:
             lg.debug(f"Found {device.FriendlyName}: Not listed, ignoring")
     else:
         lg.warning(f"No monitoring device found")
 
+
+    print("\n\n===== SAVING CHANGES =====")
+
     if args.dryrun:
-        print("\n\nDRY RUN - No changes will be saved")
+        print("\nDRY RUN - No changes will be saved")
     else:
-        print("\n\nSAVING CHANGES...")
-        save_scene_collection(sc_path, sc)
-        save_profile(prof_path, prof)
+        if scene_changes > 0:
+            print("\n  SAVING SCENE CHANGES...")
+            save_scene_collection(sc_path, sc)
+        else:
+            print("\n  NO SCENE CHANGES TO SAVE")
+
+        if profile_changes > 0:
+            print("\n  SAVING PROFILE CHANGES...")
+            save_profile(prof_path, prof)
+        else:
+            print("\n  NO PROFILE CHANGES TO SAVE")
+
 
     print("\n\n===== FINAL DEVICE ASSIGNMENTS =====")
     for assignment in final_devices:
         print(f"  {assignment}")
+
+    return scene_changes, profile_changes
 
     # if device.id == default_input_device.id:
     #     print(f" * {device.FriendlyName}")
@@ -369,7 +406,11 @@ if __name__ == "__main__":
     # except Exception as e:
     #     lg.error(f"An error occurred: {e}")
     #     sys.exit(1)
-    autoset()
+    scene_changes, profile_changes = autoset()
+
+    if not any([scene_changes, profile_changes]):
+        # print("\nNo changes were made. Exiting.")
+        sys.exit(0)
 
     print("\n\nPress any key to end...")
     keypress = msvcrt.getch()  # Waits for a keypress
