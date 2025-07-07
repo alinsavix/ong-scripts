@@ -32,6 +32,7 @@
 
 import argparse
 import configparser
+import ctypes
 import json
 import logging as lg
 import msvcrt
@@ -82,6 +83,12 @@ def get_default_input_device() -> AudioDevice:
 # def set_default_device(device: AudioDevice):
 #     AudioUtilities.SetDefaultDevice(device.id)
 
+
+# This feels ugly, but it seems to be the best way to do this?
+def show_alert(title: str, message: str) -> None:
+    # This is MB_ICONEXCLAMATION + MB_TOPMOST
+    flags = 0x30 + 0x1000
+    ctypes.windll.user32.MessageBoxW(0, message, title, flags)
 
 # scene collection wrangling
 def load_scene_collection(file: Path) -> Dict[str, Any]:
@@ -180,7 +187,7 @@ def save_profile(file: Path, profile: dict) -> None:
         raise
 
 
-def load_config(config_path: Path, hostname: str = None) -> dict:
+def load_config(config_path: Path, hostname: Optional[str] = None) -> dict:
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             full_config = toml.load(f)
@@ -231,7 +238,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def unfuck(force_debug: bool = False) -> Tuple[int, int]:
+def unfuck(force_debug: bool = False) -> Tuple[int, int, List[str]]:
     args = parse_args()
 
     # logformat = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
@@ -292,6 +299,7 @@ def unfuck(force_debug: bool = False) -> Tuple[int, int]:
     print("\n===== FINDING DEVICE ASSIGNMENTS =====")
 
     final_devices = []
+    final_devices_changed = []
 
     print("\nFINDING INPUTS:")
     active_input_devices = get_active_input_devices()
@@ -309,6 +317,7 @@ def unfuck(force_debug: bool = False) -> Tuple[int, int]:
                         print(f"  Found {device.FriendlyName}: Assigning to source {source['name']}")
                         source["settings"]["device_id"] = device.id
                         final_devices.append(f"CHANGED: {source['name']} <- {device.FriendlyName} (id: {id})")
+                        final_devices_changed.append(f"  - CHANGED: input source '{source['name']}' = {device.FriendlyName}")
                         scene_changes += 1
                     else:
                         print(f"  Found {device.FriendlyName}: Already assigned to {source['name']}")
@@ -337,6 +346,7 @@ def unfuck(force_debug: bool = False) -> Tuple[int, int]:
                         print(f"  Found {device.FriendlyName}: Assigning to source {source['name']}")
                         source["settings"]["device_id"] = device.id
                         final_devices.append(f"CHANGED: {source['name']} <- (output catpure) {device.FriendlyName} (id: {id})")
+                        final_devices_changed.append(f"  - CHANGED: output capture source '{source['name']}' = {device.FriendlyName}")
                         scene_changes += 1
                     else:
                         print(f"  Found {device.FriendlyName}: Already assigned to {source['name']}")
@@ -359,6 +369,7 @@ def unfuck(force_debug: bool = False) -> Tuple[int, int]:
                 prof["Audio"]["MonitoringDeviceId"] = device.id
                 prof["Audio"]["MonitoringDeviceName"] = device.FriendlyName
                 final_devices.append(f"CHANGED: MONITOR -> {device.FriendlyName} (id: {device.id})")
+                final_devices_changed.append(f"  - MONITORING = {device.FriendlyName}")
                 profile_changes += 1
             else:
                 print(f"  Found {device.FriendlyName}: Already assigned as monitoring device")
@@ -392,7 +403,7 @@ def unfuck(force_debug: bool = False) -> Tuple[int, int]:
     for assignment in final_devices:
         print(f"  {assignment}")
 
-    return scene_changes, profile_changes
+    return scene_changes, profile_changes, final_devices_changed
 
     # if device.id == default_input_device.id:
     #     print(f" * {device.FriendlyName}")
@@ -406,17 +417,22 @@ if __name__ == "__main__":
     # except Exception as e:
     #     lg.error(f"An error occurred: {e}")
     #     sys.exit(1)
-    scene_changes, profile_changes = unfuck()
+    scene_changes, profile_changes, final_devices_changed = unfuck()
 
     if not any([scene_changes, profile_changes]):
         # print("\nNo changes were made. Exiting.")
         sys.exit(0)
 
-    print("\n\nPress any key to end...")
-    keypress = msvcrt.getch()  # Waits for a keypress
+    popup_message = "Changed devices:\n\n" + "\n".join(final_devices_changed)
+    popup_message += "\n\nClose dialog to continue..."
 
-    if keypress.decode('utf-8') == "d":
-        unfuck(force_debug=True)
+    show_alert("Autounfucker: OBS Devices Changed", popup_message)
 
-        print("\n\nPress any key to end...")
-        keypress = msvcrt.getch()  # Waits for a keypress
+    # print("\n\nPress any key to end...")
+    # keypress = msvcrt.getch()  # Waits for a keypress
+
+    # if keypress.decode('utf-8') == "d":
+    #     unfuck(force_debug=True)
+
+    #     print("\n\nPress any key to end...")
+    #     keypress = msvcrt.getch()  # Waits for a keypress
