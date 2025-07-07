@@ -130,7 +130,8 @@ makefile            text
 *.png      binary
 *.psb      lfs
 *.psd      lfs
-*.svg      text    # SVG treated as text by default... should it be?
+# SVG treated as text by default... should it be?
+*.svg      text
 *.tga      binary
 *.tif      binary
 *.tiff     binary
