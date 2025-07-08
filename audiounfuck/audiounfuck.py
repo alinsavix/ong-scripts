@@ -62,19 +62,21 @@ def get_basedir() -> Path:
 
 
 def get_default_output_device() -> AudioDevice:
+    # with warnings.catch_warnings():  # suppress COMError warnings
+    #     warnings.simplefilter("ignore", UserWarning)
     return AudioUtilities.GetSpeakers()
 
 
 def get_active_output_devices() -> List[AudioDevice]:
-    with warnings.catch_warnings():  # suppress COMError warnings
-        warnings.simplefilter("ignore", UserWarning)
-        return AudioUtilities.GetAllDevices(data_flow=EDataFlow.eRender.value,
-                                            device_state=DEVICE_STATE.ACTIVE.value)
+    # with warnings.catch_warnings():  # suppress COMError warnings
+    #     warnings.simplefilter("ignore", UserWarning)
+    return AudioUtilities.GetAllDevices(data_flow=EDataFlow.eRender.value,
+                                                device_state=DEVICE_STATE.ACTIVE.value)
 
 def get_active_input_devices() -> List[AudioDevice]:
-    with warnings.catch_warnings():  # suppress COMError warnings
-        warnings.simplefilter("ignore", UserWarning)
-        return AudioUtilities.GetAllDevices(data_flow=EDataFlow.eCapture.value,
+    # with warnings.catch_warnings():  # suppress COMError warnings
+    #     warnings.simplefilter("ignore", UserWarning)
+    return AudioUtilities.GetAllDevices(data_flow=EDataFlow.eCapture.value,
                                             device_state=DEVICE_STATE.ACTIVE.value)
 
 def get_default_input_device() -> AudioDevice:
@@ -238,22 +240,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def unfuck(force_debug: bool = False) -> Tuple[int, int, List[str]]:
-    args = parse_args()
-
+def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     # logformat = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
-    logformat = "%(levelname)s | %(message)s"
+    logformat = "%(name)s,%(module)s,%(funcName)s | %(levelname)s | %(message)s"
     lg.basicConfig(
         stream=sys.stdout,
         format=logformat
     )
 
-    if args.debug or force_debug:
+    if args.debug:
         loglevel = lg.DEBUG
     else:
         loglevel = lg.INFO
 
     lg.getLogger().setLevel(loglevel)
+
+    # ignore COMError warnings when using pycaw, since we always get them
+    lg.getLogger("comtypes").setLevel(lg.ERROR)
 
     print("OBS AUDIO DEVICE UN-FUCKER\n\n")
 
@@ -412,27 +415,41 @@ def unfuck(force_debug: bool = False) -> Tuple[int, int, List[str]]:
 
 
 if __name__ == "__main__":
+    args = parse_args()
     # try:
     #     autoset()
     # except Exception as e:
     #     lg.error(f"An error occurred: {e}")
     #     sys.exit(1)
-    scene_changes, profile_changes, final_devices_changed = unfuck()
 
-    if not any([scene_changes, profile_changes]):
+    scene_changes, profile_changes, final_devices_changed = unfuck(args)
+
+    if not any([scene_changes, profile_changes]) and not args.debug:
         # print("\nNo changes were made. Exiting.")
         sys.exit(0)
 
-    popup_message = "Changed devices:\n\n" + "\n".join(final_devices_changed)
-    popup_message += "\n\nClose dialog to continue..."
+    # Something changed and we're not debugging -- show popup and exit
+    if final_devices_changed and not args.debug:
+        popup_message = "Changed devices:\n\n" + "\n".join(final_devices_changed)
+        popup_message += "\n\nClose dialog to continue..."
 
-    show_alert("Autounfucker: OBS Devices Changed", popup_message)
+        show_alert("Autounfucker: OBS Devices Changed", popup_message)
+        sys.exit(0)  # FIXME: Should this be non-zero?
 
-    # print("\n\nPress any key to end...")
+    # Nothing changed and we're not debugging -- just exit
+    if not final_devices_changed and not args.debug:
+        sys.exit(0)
+
+    # Otherwise, we're debugging
+    # print("\n\nPress 'd' to debug, any other key to end...")
     # keypress = msvcrt.getch()  # Waits for a keypress
 
     # if keypress.decode('utf-8') == "d":
-    #     unfuck(force_debug=True)
+    #     args.debug = True
+    #     unfuck(args)
 
     #     print("\n\nPress any key to end...")
     #     keypress = msvcrt.getch()  # Waits for a keypress
+
+    print("\n\nPress any key to end...")
+    keypress = msvcrt.getch()  # Waits for a keypress
