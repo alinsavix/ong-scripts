@@ -237,7 +237,55 @@ def parse_args() -> argparse.Namespace:
         help="Configuration file to use (default: audiounfuck.conf in script directory)"
     )
 
+    parser.add_argument(
+        "--list-devices",
+        action="store_true",
+        help="List all available input and output devices on the system"
+    )
+
     return parser.parse_args()
+
+
+def list_devices() -> None:
+    """List all available input and output devices on the system."""
+    print("AUDIO DEVICES LISTING\n")
+
+    # Get default devices
+    try:
+        default_input = get_default_input_device()
+        default_output = get_default_output_device()
+    except Exception as e:
+        lg.error(f"Error getting default devices: {e}")
+        default_input = None
+        default_output = None
+
+    # Get all active devices
+    try:
+        input_devices = get_active_input_devices()
+        output_devices = get_active_output_devices()
+    except Exception as e:
+        lg.error(f"Error getting device lists: {e}")
+        return
+
+    print("INPUT DEVICES:")
+    print("==============")
+    if input_devices:
+        for device in input_devices:
+            marker = " *" if default_input and device.id == default_input.id else "  "
+            print(f"{marker} {device.FriendlyName} (id: {device.id})")
+    else:
+        print("  No input devices found")
+
+    print("\nOUTPUT DEVICES:")
+    print("===============")
+    if output_devices:
+        for device in output_devices:
+            marker = " *" if default_output and device.id == default_output.id else "  "
+            print(f"{marker} {device.FriendlyName} (id: {device.id})")
+    else:
+        print("  No output devices found")
+
+    print("\n* = Default device")
 
 
 def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
@@ -416,6 +464,10 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
 
 if __name__ == "__main__":
     args = parse_args()
+    if args.list_devices:
+        list_devices()
+        sys.exit(0)
+
     # try:
     #     autoset()
     # except Exception as e:
