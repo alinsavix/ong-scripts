@@ -71,13 +71,13 @@ def get_active_output_devices() -> List[AudioDevice]:
     # with warnings.catch_warnings():  # suppress COMError warnings
     #     warnings.simplefilter("ignore", UserWarning)
     return AudioUtilities.GetAllDevices(data_flow=EDataFlow.eRender.value,
-                                                device_state=DEVICE_STATE.ACTIVE.value)
+                                        device_state=DEVICE_STATE.ACTIVE.value)
 
 def get_active_input_devices() -> List[AudioDevice]:
     # with warnings.catch_warnings():  # suppress COMError warnings
     #     warnings.simplefilter("ignore", UserWarning)
     return AudioUtilities.GetAllDevices(data_flow=EDataFlow.eCapture.value,
-                                            device_state=DEVICE_STATE.ACTIVE.value)
+                                        device_state=DEVICE_STATE.ACTIVE.value)
 
 def get_default_input_device() -> AudioDevice:
     return AudioUtilities.GetMicrophone()
@@ -95,7 +95,7 @@ def show_alert(title: str, message: str) -> None:
 # scene collection wrangling
 def load_scene_collection(file: Path) -> Dict[str, Any]:
     try:
-        with open(file, 'r', encoding='utf-8') as f:
+        with file.open('r', encoding='utf-8') as f:
             scene_collection = json.load(f)
         return cast(Dict[str, Any], scene_collection)
     except FileNotFoundError:
@@ -106,7 +106,7 @@ def load_scene_collection(file: Path) -> Dict[str, Any]:
         raise
 
 
-def save_scene_collection(file: Path, scene_collection: dict) -> None:
+def save_scene_collection(file: Path, scene_collection: dict[str, Any]) -> None:
     try:
         if file.exists():
             bak_dir = file.parent / "bak"
@@ -117,7 +117,7 @@ def save_scene_collection(file: Path, scene_collection: dict) -> None:
             print(f"    Created scene collection backup at: {backup_path}")
 
         # Save the new scene collection
-        with open(file, 'w') as f:
+        with file.open('w', encoding='utf-8') as f:
             json.dump(scene_collection, f, indent=2)
         print(f"    Updated scene collection saved to: {file}")
 
@@ -126,7 +126,7 @@ def save_scene_collection(file: Path, scene_collection: dict) -> None:
         raise
 
 
-def find_source_by_name(sc: dict, sourcename: str) -> Optional[dict]:
+def find_source_by_name(sc: dict[str, Any], sourcename: str) -> Optional[dict[str, Any]]:
     for source in sc.get("sources", []):
         if source.get("name") == sourcename:
             return source
@@ -136,13 +136,13 @@ def find_source_by_name(sc: dict, sourcename: str) -> Optional[dict]:
 
 # profile wrangling
 # FIXME: Do we actually need to convert this to a dict?
-def load_profile(file: Path) -> dict:
+def load_profile(file: Path) -> dict[str, Any]:
     try:
         # Disable interpolation to handle % characters in values
         config = configparser.ConfigParser(interpolation=None)
-        config.optionxform=str  # don't lowercase keys
+        config.optionxform = str  # don't lowercase keys
         # Explicitly open with UTF-8 encoding to handle BOM
-        with open(file, 'r', encoding='utf-8-sig') as f:
+        with file.open('r', encoding='utf-8-sig') as f:
             config.read_file(f)
 
         # Convert the config object to a dictionary
@@ -159,7 +159,7 @@ def load_profile(file: Path) -> dict:
         raise
 
 
-def save_profile(file: Path, profile: dict) -> None:
+def save_profile(file: Path, profile: dict[str, Any]) -> None:
     try:
         if file.exists():
             bak_dir = file.parent / "bak"
@@ -180,7 +180,7 @@ def save_profile(file: Path, profile: dict) -> None:
 
         # Save the profile to the file. Make it look like it does when OBS
         # writes it -- no spaces around delimiters, only newlines for eol
-        with open(file, 'w', newline="\n") as f:
+        with file.open('w', newline="\n", encoding='utf-8-sig') as f:
             config.write(f, space_around_delimiters=False)
         print(f"    Profile saved to: {file}")
 
@@ -189,9 +189,9 @@ def save_profile(file: Path, profile: dict) -> None:
         raise
 
 
-def load_config(config_path: Path, hostname: Optional[str] = None) -> dict:
+def load_config(config_path: Path, hostname: Optional[str] = None) -> dict[str, Any]:
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with config_path.open('r', encoding='utf-8') as f:
             full_config = toml.load(f)
         lg.debug(f"Loaded configuration from: {config_path}")
 
@@ -247,19 +247,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def list_devices() -> None:
-    """List all available input and output devices on the system."""
     print("AUDIO DEVICES LISTING\n")
 
-    # Get default devices
-    try:
-        default_input = get_default_input_device()
-        default_output = get_default_output_device()
-    except Exception as e:
-        lg.error(f"Error getting default devices: {e}")
-        default_input = None
-        default_output = None
-
-    # Get all active devices
     try:
         input_devices = get_active_input_devices()
         output_devices = get_active_output_devices()
@@ -271,8 +260,7 @@ def list_devices() -> None:
     print("==============")
     if input_devices:
         for device in input_devices:
-            marker = " *" if default_input and device.id == default_input.id else "  "
-            print(f"{marker} {device.FriendlyName} (id: {device.id})")
+            print(f"  {device.FriendlyName} (id: {device.id})")
     else:
         print("  No input devices found")
 
@@ -280,17 +268,14 @@ def list_devices() -> None:
     print("===============")
     if output_devices:
         for device in output_devices:
-            marker = " *" if default_output and device.id == default_output.id else "  "
-            print(f"{marker} {device.FriendlyName} (id: {device.id})")
+            print(f"  {device.FriendlyName} (id: {device.id})")
     else:
         print("  No output devices found")
 
-    print("\n* = Default device")
-
 
 def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
-    # logformat = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
-    logformat = "%(name)s,%(module)s,%(funcName)s | %(levelname)s | %(message)s"
+    # logformat = "%(name)s,%(module)s,%(funcName)s | %(levelname)s | %(message)s"
+    logformat = "%(levelname)s | %(message)s"
     lg.basicConfig(
         stream=sys.stdout,
         format=logformat
@@ -358,7 +343,7 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     for device in active_input_devices:
         if device.FriendlyName in input_map:
             d = input_map[device.FriendlyName]
-            id = device.id
+            devid = device.id
             # print(f"map {d} to {device.FriendlyName} (id: {id})")
 
             for sourcename in d:
@@ -367,12 +352,12 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
                     if source["settings"]["device_id"] != device.id:
                         print(f"  Found {device.FriendlyName}: Assigning to source {source['name']}")
                         source["settings"]["device_id"] = device.id
-                        final_devices.append(f"CHANGED: {source['name']} <- {device.FriendlyName} (id: {id})")
+                        final_devices.append(f"CHANGED: {source['name']} <- {device.FriendlyName} (id: {devid})")
                         final_devices_changed.append(f"  - CHANGED: input source '{source['name']}' = {device.FriendlyName}")
                         scene_changes += 1
                     else:
                         print(f"  Found {device.FriendlyName}: Already assigned to {source['name']}")
-                        final_devices.append(f"UNCHANGED: {source['name']} <- {device.FriendlyName} (id: {id})")
+                        final_devices.append(f"UNCHANGED: {source['name']} <- {device.FriendlyName} (id: {devid})")
                     break
             else:
                 lg.warning(f"Found input {device.FriendlyName}, but no matching sources found in OBS")
@@ -387,7 +372,7 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     for device in active_output_devices:
         if device.FriendlyName in output_capture_map:
             d = output_capture_map[device.FriendlyName]
-            id = device.id
+            devid = device.id
             # print(f"map {d} to {device.FriendlyName} (id: {id})")
 
             for sourcename in d:
@@ -396,12 +381,12 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
                     if source["settings"]["device_id"] != device.id:
                         print(f"  Found {device.FriendlyName}: Assigning to source {source['name']}")
                         source["settings"]["device_id"] = device.id
-                        final_devices.append(f"CHANGED: {source['name']} <- (output catpure) {device.FriendlyName} (id: {id})")
+                        final_devices.append(f"CHANGED: {source['name']} <- (output catpure) {device.FriendlyName} (id: {devid})")
                         final_devices_changed.append(f"  - CHANGED: output capture source '{source['name']}' = {device.FriendlyName}")
                         scene_changes += 1
                     else:
                         print(f"  Found {device.FriendlyName}: Already assigned to {source['name']}")
-                        final_devices.append(f"UNCHANGED: {source['name']} <- (output catpure) {device.FriendlyName} (id: {id})")
+                        final_devices.append(f"UNCHANGED: {source['name']} <- (output catpure) {device.FriendlyName} (id: {devid})")
                     break
             else:
                 lg.warning(f"Found output {device.FriendlyName}, but no matching sources found in OBS")
@@ -429,7 +414,7 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
         else:
             lg.debug(f"Found {device.FriendlyName}: Not listed, ignoring")
     else:
-        lg.warning(f"No monitoring device found")
+        lg.warning("No monitoring device found")
 
 
     print("\n\n===== SAVING CHANGES =====")
@@ -456,23 +441,12 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
 
     return scene_changes, profile_changes, final_devices_changed
 
-    # if device.id == default_input_device.id:
-    #     print(f" * {device.FriendlyName}")
-    # else:
-    #     print(f"   {device.FriendlyName}")
-
 
 if __name__ == "__main__":
     args = parse_args()
     if args.list_devices:
         list_devices()
         sys.exit(0)
-
-    # try:
-    #     autoset()
-    # except Exception as e:
-    #     lg.error(f"An error occurred: {e}")
-    #     sys.exit(1)
 
     scene_changes, profile_changes, final_devices_changed = unfuck(args)
 
