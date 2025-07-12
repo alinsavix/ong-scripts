@@ -39,6 +39,7 @@ import msvcrt
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import warnings
 from datetime import datetime
@@ -91,6 +92,47 @@ def show_alert(title: str, message: str) -> None:
     # This is MB_ICONEXCLAMATION + MB_TOPMOST
     flags = 0x30 + 0x1000
     ctypes.windll.user32.MessageBoxW(0, message, title, flags)
+
+
+# Unfortunately, the API for setting the default device for an application is
+# not public, so we can't just... call it. NirSoft has reverse engineered it,
+# though, and provided us with the "svcl" command to do it. This sucks, but
+# it's what we got.
+#
+# What sucks worse is that I don't think there's a way to know for certain
+# if the command failed or not (it always has a 0 return code), and finding
+# out if the configuration is *currently* correct seems pretty difficult
+# as well. So, yeah, this is a hack.
+def set_app_default_device(device_id: str, executable_name: str) -> bool:
+    try:
+        # Construct the svcl command
+        cmd_path = get_basedir() / "svcl.exe"
+        cmd = [str(cmd_path), "/SetAppDefault", device_id, 'all', executable_name]
+
+        # Run the command
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        # Log command output at DEBUG level
+        lg.debug(f"Command executed: {' '.join(cmd)}")
+        lg.debug(f"Command stdout: {result.stdout}")
+        # lg.debug(f"Command stderr: {result.stderr}")
+        # lg.debug(f"Command return code: {result.returncode}")
+
+        print(f"  Successfully set {device_id} as default device for {executable_name}")
+        return True
+
+    except subprocess.CalledProcessError as e:
+        lg.error(f"Failed to set default device for {executable_name}: {e}")
+        lg.error(f"Command output: {e.stdout}")
+        lg.error(f"Command error: {e.stderr}")
+        return False
+    except FileNotFoundError:
+        lg.error("svcl executable not found in PATH")
+        return False
+    except Exception as e:
+        lg.error(f"Unexpected error setting default device: {e}")
+        return False
+
 
 # scene collection wrangling
 def load_scene_collection(file: Path) -> Dict[str, Any]:
@@ -318,9 +360,10 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     obs_dir = Path(config['obs_directory'])
     obs_profile = config['obs_profile']
     obs_scene_collection = config['obs_scene_collection']
-    input_map = config['inputs']
-    output_capture_map = config['output_captures']
-    monitor_devices = config['monitor_devices']
+    input_map = config['inputs'] or {}
+    output_capture_map = config['output_captures'] or {}
+    monitor_devices = config['monitor_devices'] or []
+    app_outputs = config['app_outputs'] or {}
 
     sc_path = obs_dir / "config/obs-studio/basic/scenes" / f"{obs_scene_collection}.json"
     prof_path = obs_dir / "config/obs-studio/basic/profiles" / obs_profile / "basic.ini"
@@ -370,6 +413,10 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
 
     # FIXME: DRY
     for device in active_output_devices:
+        if device.FriendlyName in app_outputs:
+            for executable_name in app_outputs[device.FriendlyName]:
+                set_app_default_device(device.id, executable_name)
+
         if device.FriendlyName in output_capture_map:
             d = output_capture_map[device.FriendlyName]
             devid = device.id
@@ -387,7 +434,6 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
                     else:
                         print(f"  Found {device.FriendlyName}: Already assigned to {source['name']}")
                         final_devices.append(f"UNCHANGED: {source['name']} <- (output catpure) {device.FriendlyName} (id: {devid})")
-                    break
             else:
                 lg.warning(f"Found output {device.FriendlyName}, but no matching sources found in OBS")
         else:
@@ -396,7 +442,7 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
 
     print("\nFINDING MONITORING DEVICE:")
 
-    # FIXME: DRY
+    # FIXME: DRY -- we can probably just bundle this with the above
     for device in active_output_devices:
         if device.FriendlyName in monitor_devices:
             if prof["Audio"]["MonitoringDeviceId"] != device.id:
