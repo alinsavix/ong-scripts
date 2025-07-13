@@ -3,7 +3,9 @@ block_cipher = None
 a = Analysis(
     ['audiounfuck.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        ("svcl.exe", "."),
+    ],
     datas=[("icons8-audio-100.png", "icons8-audio-100.png")],
     hiddenimports=[],
     hookspath=[],

@@ -40,9 +40,9 @@ warn_return_any = true
 warn_unreachable = true
 warn_no_return = true
 
-[[tool.mypy.overrides]]
-module = [ "matplotlib.*" ]
-ignore_missing_imports = true
+# [[tool.mypy.overrides]]
+# module = [ "pycaw.*" ]
+# ignore_errors = true
 
 [tool.autopep8]
 max_line_length = 96

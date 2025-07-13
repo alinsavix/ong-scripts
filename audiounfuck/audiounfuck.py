@@ -1,63 +1,39 @@
 #!/usr/bin/env python
-
-# from jinokimijin:
-# List of available output devices (* = default):
-#  * Game (TC-Helicon GoXLR)
-#    Speakers (Realtek(R) Audio)
-#    Chat (TC-Helicon GoXLR)
-#    Music (TC-Helicon GoXLR)
-#    Sample (TC-Helicon GoXLR)
-#    System (TC-Helicon GoXLR)
-#    Speakers (Voice.ai Audio Cable)
-#    Realtek Digital Output (Realtek(R) Audio)
-#    Speakers (USB DAC - E01)
-# Changing default device to Speakers (USB DAC - E01)...
-# Updated list of available output devices (* = default):
-# * Game (TC-Helicon GoXLR)
-#   Speakers (Realtek(R) Audio)
-#   Chat (TC-Helicon GoXLR)
-#   Music (TC-Helicon GoXLR)
-#   Sample (TC-Helicon GoXLR)
-#   System (TC-Helicon GoXLR)
-#   Speakers (Voice.ai Audio Cable)
-#   Realtek Digital Output (Realtek(R) Audio)
-#   Speakers (USB DAC - E01)
-
-
-# So we basically need to map...
-#
-# audio capture source -> input device
-# output capture source -> output device
-# monitor -> output device
-
 import argparse
 import configparser
 import ctypes
 import json
 import logging as lg
 import msvcrt
-import os
 import shutil
 import socket
 import subprocess
 import sys
-import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import toml
-from pycaw.constants import DEVICE_STATE, EDataFlow
-from pycaw.pycaw import AudioUtilities
-from pycaw.utils import AudioDevice
+from pycaw.constants import DEVICE_STATE, EDataFlow  # type: ignore
+from pycaw.pycaw import AudioUtilities  # type: ignore
+from pycaw.utils import AudioDevice  # type: ignore
 from tdvutil import ppretty
 
 
 # return the directory the script is in, be it in a pyinstaller bundle, or
 # as a normal Python script
-def get_basedir() -> Path:
+def get_exedir() -> Path:
     if getattr(sys, 'frozen', False):
         return Path(sys.executable).parent
+    else:
+        return Path(__file__).resolve().parent
+
+
+# return the directory that pyinstaller extracted to, if it was used,
+# otherwise behaves the same as get_exedir()
+def get_extractdir() -> Path:
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS)  # type: ignore
     else:
         return Path(__file__).resolve().parent
 
@@ -106,7 +82,7 @@ def show_alert(title: str, message: str) -> None:
 def set_app_default_device(device_id: str, executable_name: str) -> bool:
     try:
         # Construct the svcl command
-        cmd_path = get_basedir() / "svcl.exe"
+        cmd_path = get_extractdir() / "svcl.exe"
         cmd = [str(cmd_path), "/SetAppDefault", device_id, 'all', executable_name]
 
         # Run the command
@@ -341,7 +317,7 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     # Determine config file path
     if args.config is None:
         # Use audiounfuck.conf in script directory
-        script_dir = get_basedir()
+        script_dir = get_exedir()
         config_path = script_dir / "audiounfuck.conf"
     else:
         config_path = Path(args.config)
