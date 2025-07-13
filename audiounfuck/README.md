@@ -54,6 +54,12 @@ monitor_devices = [
 
 [jinokimijin.output_captures]
 "System (TC-Helicon GoXLR)" = ["nightbot"]
+
+# Note that for this, filenames *must* be quoted with ' and not "
+# You can use the special string "MONITOR" to set the OBS monitoring device.
+[jinokimijin.app_outputs]
+"Music (TC-Helicon GoXLR)" = ['C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe']
+"System (TC-Helicon GoXLR)" = ["MONITOR"]
 ```
 
 ### Configuration Options
@@ -61,9 +67,9 @@ monitor_devices = [
 - **`obs_directory`**: Path to your OBS Studio installation
 - **`obs_profile`**: Name of the OBS profile to modify
 - **`obs_scene_collection`**: Name of the scene collection to modify
-- **`monitor_devices`**: List of output device names that could be used for monitoring (normally only one device would be listed)
 - **`inputs`**: Mapping of Windows input device names to OBS source names
 - **`output_captures`**: Mapping of Windows output device names to OBS source names
+- **`app_outputs`**: Mapping of what device specific applications should be outputting through
 
 ## Usage
 
