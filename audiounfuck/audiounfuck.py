@@ -362,7 +362,7 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     obs_scene_collection = config['obs_scene_collection']
     input_map = config['inputs'] or {}
     output_capture_map = config['output_captures'] or {}
-    monitor_devices = config['monitor_devices'] or []
+    # monitor_devices = config['monitor_devices'] or []
     app_outputs = config['app_outputs'] or {}
 
     sc_path = obs_dir / "config/obs-studio/basic/scenes" / f"{obs_scene_collection}.json"
@@ -415,7 +415,21 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     for device in active_output_devices:
         if device.FriendlyName in app_outputs:
             for executable_name in app_outputs[device.FriendlyName]:
-                set_app_default_device(device.id, executable_name)
+                if executable_name != "MONITOR":
+                    set_app_default_device(device.id, executable_name)
+                else:
+                    if prof["Audio"]["MonitoringDeviceId"] != device.id:
+                        print(f"  Found {device.FriendlyName}: Assigning as monitoring device")
+
+                        prof["Audio"]["MonitoringDeviceId"] = device.id
+                        prof["Audio"]["MonitoringDeviceName"] = device.FriendlyName
+                        final_devices.append(
+                            f"CHANGED: MONITOR -> {device.FriendlyName} (id: {device.id})")
+                        final_devices_changed.append(f"  - MONITORING = {device.FriendlyName}")
+                        profile_changes += 1
+                    else:
+                        print(f"  Found {device.FriendlyName}: Already assigned as monitoring device")
+                        final_devices.append(f"UNCHANGED: MONITOR -> {device.FriendlyName} (id: {device.id})")
 
         if device.FriendlyName in output_capture_map:
             d = output_capture_map[device.FriendlyName]
@@ -443,24 +457,24 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     print("\nFINDING MONITORING DEVICE:")
 
     # FIXME: DRY -- we can probably just bundle this with the above
-    for device in active_output_devices:
-        if device.FriendlyName in monitor_devices:
-            if prof["Audio"]["MonitoringDeviceId"] != device.id:
-                print(f"  Found {device.FriendlyName}: Assigning as monitoring device")
+    # for device in active_output_devices:
+    #     if device.FriendlyName in monitor_devices:
+    #         if prof["Audio"]["MonitoringDeviceId"] != device.id:
+    #             print(f"  Found {device.FriendlyName}: Assigning as monitoring device")
 
-                prof["Audio"]["MonitoringDeviceId"] = device.id
-                prof["Audio"]["MonitoringDeviceName"] = device.FriendlyName
-                final_devices.append(f"CHANGED: MONITOR -> {device.FriendlyName} (id: {device.id})")
-                final_devices_changed.append(f"  - MONITORING = {device.FriendlyName}")
-                profile_changes += 1
-            else:
-                print(f"  Found {device.FriendlyName}: Already assigned as monitoring device")
-                final_devices.append(f"UNCHANGED: MONITOR -> {device.FriendlyName} (id: {device.id})")
-            break
-        else:
-            lg.debug(f"Found {device.FriendlyName}: Not listed, ignoring")
-    else:
-        lg.warning("No monitoring device found")
+    #             prof["Audio"]["MonitoringDeviceId"] = device.id
+    #             prof["Audio"]["MonitoringDeviceName"] = device.FriendlyName
+    #             final_devices.append(f"CHANGED: MONITOR -> {device.FriendlyName} (id: {device.id})")
+    #             final_devices_changed.append(f"  - MONITORING = {device.FriendlyName}")
+    #             profile_changes += 1
+    #         else:
+    #             print(f"  Found {device.FriendlyName}: Already assigned as monitoring device")
+    #             final_devices.append(f"UNCHANGED: MONITOR -> {device.FriendlyName} (id: {device.id})")
+    #         break
+    #     else:
+    #         lg.debug(f"Found {device.FriendlyName}: Not listed, ignoring")
+    # else:
+    #     lg.warning("No monitoring device found")
 
 
     print("\n\n===== SAVING CHANGES =====")
