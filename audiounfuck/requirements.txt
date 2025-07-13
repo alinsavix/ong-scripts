@@ -1,0 +1,26 @@
+# Need the dev version of this, would be nice if they'd merge it, heh
+https://github.com/AndreMiras/pycaw/archive/develop.zip
+
+# Other bits
+tdvutil
+toml
+
+# for packaging
+pyinstaller
+pillow
+
+# standard debugging and linting
+mypy
+types-toml
+
+# our standard flake8 bits (...maybe we need a metapackage)
+flake8
+flake8-async
+flake8-bugbear
+flake8-builtins
+flake8-comprehensions
+flake8-import-conventions
+flake8-pyproject
+flake8-secure-coding-standard
+flake8_simplify
+flake8-use-pathlib
