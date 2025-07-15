@@ -6,7 +6,7 @@ a = Analysis(
     binaries=[
         ("svcl.exe", "."),
     ],
-    datas=[("icons8-audio-100.png", "icons8-audio-100.png")],
+    datas=[("icons8-audio-100.ico", "icons8-audio-100.ico")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -39,6 +39,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="icons8-audio-100.png",
+    icon="icons8-audio-100.ico",
     version="file_version_info.txt",
 )
