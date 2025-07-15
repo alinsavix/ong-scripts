@@ -261,6 +261,12 @@ def parse_args() -> argparse.Namespace:
         help="List all available input and output devices on the system"
     )
 
+    parser.add_argument(
+        "--logdir",
+        default=None,
+        help="Directory to write log files to (with timestamped filename)"
+    )
+
     return parser.parse_args()
 
 
@@ -292,19 +298,37 @@ def list_devices() -> None:
 
 
 def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
-    # logformat = "%(name)s,%(module)s,%(funcName)s | %(levelname)s | %(message)s"
     logformat = "%(levelname)s | %(message)s"
-    lg.basicConfig(
-        stream=sys.stdout,
-        format=logformat
-    )
+    root_logger = lg.getLogger()
+    root_logger.setLevel(lg.DEBUG)  # Always capture everything
 
-    if args.debug:
-        loglevel = lg.DEBUG
-    else:
-        loglevel = lg.INFO
+    # Remove any default handlers
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
 
-    lg.getLogger().setLevel(loglevel)
+    # The handler for what output the user sees
+    console_handler = lg.StreamHandler(sys.stdout)
+    console_handler.setFormatter(lg.Formatter(logformat))
+    console_handler.setLevel(lg.DEBUG if args.debug else lg.INFO)
+    root_logger.addHandler(console_handler)
+
+    # File handler
+    if args.logdir:
+        try:
+            logdir = Path(args.logdir)
+            logdir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_filename = f"audiounfuck_{timestamp}.log"
+            log_path = logdir / log_filename
+
+            file_handler = lg.FileHandler(log_path, encoding='utf-8')
+            file_handler.setFormatter(lg.Formatter(logformat))
+            file_handler.setLevel(lg.DEBUG)
+            root_logger.addHandler(file_handler)
+            print(f"Logging to file: {log_path}")
+        except Exception as e:
+            print(f"Warning: Could not create log file in {args.logdir}: {e}")
+            print("Continuing without file logging...")
 
     # ignore COMError warnings when using pycaw, since we always get them
     lg.getLogger("comtypes").setLevel(lg.ERROR)
@@ -350,7 +374,6 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     prof = load_profile(prof_path)
     lg.info(f"Loaded profile from {prof_path}")
 
-
     print("\n===== FINDING DEVICE ASSIGNMENTS =====")
 
     final_devices = []
@@ -382,7 +405,6 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
                 lg.warning(f"Found input {device.FriendlyName}, but no matching sources found in OBS")
         else:
             lg.debug(f"Found {device.FriendlyName}: Not listed, ignoring")
-
 
     print("\nFINDING OUTPUTS:")
     active_output_devices = get_active_output_devices()
@@ -429,7 +451,6 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
         else:
             lg.debug(f"Found {device.FriendlyName}: Not listed, ignoring")
 
-
     print("\nFINDING MONITORING DEVICE:")
 
     # FIXME: DRY -- we can probably just bundle this with the above
@@ -452,7 +473,6 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     # else:
     #     lg.warning("No monitoring device found")
 
-
     print("\n\n===== SAVING CHANGES =====")
 
     if args.dryrun:
@@ -470,10 +490,27 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
         else:
             print("\n  NO PROFILE CHANGES TO SAVE")
 
-
     print("\n\n===== FINAL DEVICE ASSIGNMENTS =====")
     for assignment in final_devices:
         print(f"  {assignment}")
+
+    # Clean up old log files if --logdir is specified
+    if args.logdir:
+        try:
+            logdir = Path(args.logdir)
+            logfiles = sorted(
+                logdir.glob("audiounfuck_*.log"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True
+            )
+            for oldfile in logfiles[10:]:
+                try:
+                    oldfile.unlink()
+                    lg.debug(f"Deleted old logfile: {oldfile}")
+                except Exception as e:
+                    lg.warning(f"Could not delete old logfile {oldfile}: {e}")
+        except Exception as e:
+            print(f"Warning: Could not clean up old log files in {args.logdir}: {e}")
 
     return scene_changes, profile_changes, final_devices_changed
 
