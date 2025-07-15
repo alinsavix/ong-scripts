@@ -241,7 +241,10 @@ def main(argv: List[str]) -> int:
 
         if not args.concert_grand:
             if not in_concert_grand:
-                if len(row) > Col.LINKS and "concert grand" in row[Col.LINKS].lower():
+                if len(row) > Col.LINKS and (
+                    "concert grand" in row[Col.LINKS].lower() or
+                    "concert grand" in row[Col.TITLE].lower()
+                ):
                     in_concert_grand = True
                     has_concert_grand = True
                     print(f"{start_time_hms} Concert Grand")
