@@ -39,6 +39,7 @@ def run_ffmpeg(args: argparse.Namespace):
 
     ffmpeg_cmd = [
         "ong-ffmpeg", "-hide_banner", "-stats_period", "60",
+        "-use_wallclock_as_timestamps", "1",
         "-f", "alsa", "-channels", "6", "-sample_rate", "48000", "-c:a", "pcm_s24le", "-channel_layout", "6.0",
         "-i", "hw:CARD=UR44,DEV=0", "-af", "pan=2c|c0=c4|c1=c5",
         "-c:a", "libfdk_aac", "-vbr", "5", "-cutoff", "18000",
