@@ -127,6 +127,10 @@ def set_bpm(host: str, port: int, sources: List[str], bpm: float):
         # print(ppretty(current.input_settings))
         # print(ppretty(r.input_settings))
         # sys.stdout.flush()
+        vendor = "AdvancedSceneSwitcher"
+        vendor_msg = "AdvancedSceneSwitcherMessage"
+        client.call_vendor_request(vendor, vendor_msg, {"message": f"BPM:{int(bpm)}"})
+
         for source in sources:
             try:
                 client.set_input_settings(source, {"speed_percent": int(bpm)}, True)
