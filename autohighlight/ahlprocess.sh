@@ -66,15 +66,16 @@ echo "TASK: extract highlights"
 
 
 # generate autocrops
-echo "TASK: generate autocrops"
+# echo "TASK: generate autocrops"
+echo "SKIPPING: generate autocrops"
 
 # FIXME: come up with a better way to identify what actually needs cropping
-./autocrop.py --ffmpeg-bin "$FFMPEG_BIN" /ong/autohighlights/highlight_*_clean_????-??-??.mp4 && chmod 644 /ong/autohighlights/*_cropped.mp4
-
-if [[ $error_count -gt 0 ]]; then
-    echo "WARNING: ${error_count} tasks failed, this (probably) shouldn't happen"
-    exit 1
-fi
+# ./autocrop.py --ffmpeg-bin "$FFMPEG_BIN" /ong/autohighlights/highlight_*_clean_????-??-??.mp4 && chmod 644 /ong/autohighlights/*_cropped.mp4
+#
+# if [[ $error_count -gt 0 ]]; then
+#     echo "WARNING: ${error_count} tasks failed, this (probably) shouldn't happen"
+#     exit 1
+# fi
 
 
 # finally, try to restart the sync process again so that it syncs the cropped
