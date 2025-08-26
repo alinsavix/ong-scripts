@@ -426,7 +426,7 @@ def gen_media_metadata(args: argparse.Namespace, media_file: Path) -> Optional[M
         return None
 
     if "video" in media_types:
-        timestamp = find_timestamp_in_range(args, media_file, 55, 30)
+        timestamp = find_timestamp_in_range(args, media_file, 55, 60)
         exact_times = True
     else:
         timestamp = approx_timestamp_from_filename(media_file)
