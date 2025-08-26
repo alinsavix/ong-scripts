@@ -434,9 +434,11 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
             devid = device.id
             # print(f"map {d} to {device.FriendlyName} (id: {id})")
 
+            outfound = 0
             for sourcename in d:
                 source = find_source_by_name(sc, sourcename)
                 if source is not None:
+                    outfound += 1
                     if source["settings"]["device_id"] != device.id:
                         print(f"  Found {device.FriendlyName}: Assigning to source {source['name']}")
                         source["settings"]["device_id"] = device.id
@@ -446,13 +448,13 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
                     else:
                         print(f"  Found {device.FriendlyName}: Already assigned to {source['name']}")
                         final_devices.append(f"UNCHANGED: {source['name']} <- (output catpure) {device.FriendlyName} (id: {devid})")
-            else:
+            if outfound == 0:
                 lg.warning(f"Found output {device.FriendlyName}, but no matching sources found in OBS")
         else:
             lg.debug(f"Found {device.FriendlyName}: Not listed, ignoring")
 
-    print("\nFINDING MONITORING DEVICE:")
-
+    # print("\nFINDING MONITORING DEVICE:")
+    #
     # FIXME: DRY -- we can probably just bundle this with the above
     # for device in active_output_devices:
     #     if device.FriendlyName in monitor_devices:
@@ -490,9 +492,12 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
         else:
             print("\n  NO PROFILE CHANGES TO SAVE")
 
-    print("\n\n===== FINAL DEVICE ASSIGNMENTS =====")
+    endtext = "\n\n===== FINAL DEVICE ASSIGNMENTS =====\n"
     for assignment in final_devices:
-        print(f"  {assignment}")
+        endtext += f"  {assignment}\n"
+
+    print(endtext)
+    lg.debug(endtext)
 
     # Clean up old log files if --logdir is specified
     if args.logdir:
