@@ -233,6 +233,44 @@ def load_config(config_path: Path, hostname: Optional[str] = None) -> dict[str, 
         raise
 
 
+def read_obs_global_profile(obs_dir: Path) -> Tuple[str, str]:
+    """Read OBS global.ini to get the actual ProfileDir and SceneCollectionFile being used."""
+    global_ini_path = obs_dir / "config/obs-studio/global.ini"
+
+    try:
+        # Disable interpolation to handle % characters in values
+        config = configparser.ConfigParser(interpolation=None)
+        config.optionxform = str  # don't lowercase keys
+        # Explicitly open with UTF-8 encoding to handle BOM
+        with global_ini_path.open('r', encoding='utf-8-sig') as f:
+            config.read_file(f)
+
+        # Extract the ProfileDir and SceneCollectionFile from [Basic] section
+        basic_section = config['Basic']
+        profile_dir = basic_section.get('ProfileDir')
+        scene_collection_file = basic_section.get('SceneCollectionFile')
+
+        if not profile_dir:
+            raise ValueError("ProfileDir not found in global.ini [Basic] section")
+        if not scene_collection_file:
+            raise ValueError("SceneCollectionFile not found in global.ini [Basic] section")
+
+        lg.debug(f"Found ProfileDir: {profile_dir}")
+        lg.debug(f"Found SceneCollectionFile: {scene_collection_file}")
+
+        return profile_dir, scene_collection_file
+
+    except FileNotFoundError:
+        lg.error(f"OBS global.ini file not found: {global_ini_path}")
+        raise
+    except configparser.Error as e:
+        lg.error(f"Error parsing global.ini file: {e}")
+        raise
+    except KeyError as e:
+        lg.error(f"Missing section or key in global.ini: {e}")
+        raise
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="OBS Audio Device Configuration Unfucker")
 
@@ -261,10 +299,17 @@ def parse_args() -> argparse.Namespace:
         help="List all available input and output devices on the system"
     )
 
+    # FIXME: we should probably make these type=Path
     parser.add_argument(
         "--logdir",
         default=None,
         help="Directory to write log files to (with timestamped filename)"
+    )
+
+    parser.add_argument(
+        "--obsdir",
+        default=None,
+        help="OBS directory path (overrides config file setting)"
     )
 
     return parser.parse_args()
@@ -353,20 +398,38 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     lg.info(f"Using config file: {config_path}")
     config = load_config(config_path, hostname)
 
+    # Determine OBS directory - use command line argument if provided, otherwise use config
+    if args.obsdir:
+        obs_dir = Path(args.obsdir)
+        if not obs_dir.exists():
+            lg.error(f"Specified OBS directory does not exist: {obs_dir}")
+            sys.exit(1)
+        lg.info(f"Using OBS directory from command line: {obs_dir}")
+    else:
+        obs_dir = Path(config['obs_directory'])
+        lg.info(f"Using OBS directory from config: {obs_dir}")
+
     scene_changes = 0
     profile_changes = 0
 
+    # Read OBS global.ini to get the actual profile directory and scene collection file
+    try:
+        profile_dir, scene_collection_file = read_obs_global_profile(obs_dir)
+        lg.info(f"Found active OBS profile: {profile_dir}")
+        lg.info(f"Found active OBS scene collection: {scene_collection_file}")
+    except Exception as e:
+        lg.error(f"Failed to read OBS global configuration: {e}")
+        sys.exit(1)
+
     # Extract configuration values
-    obs_dir = Path(config['obs_directory'])
-    obs_profile = config['obs_profile']
-    obs_scene_collection = config['obs_scene_collection']
     input_map = config['inputs'] or {}
     output_capture_map = config['output_captures'] or {}
     # monitor_devices = config['monitor_devices'] or []
     app_outputs = config['app_outputs'] or {}
 
-    sc_path = obs_dir / "config/obs-studio/basic/scenes" / f"{obs_scene_collection}.json"
-    prof_path = obs_dir / "config/obs-studio/basic/profiles" / obs_profile / "basic.ini"
+    # Construct paths using the actual values from OBS global.ini
+    sc_path = obs_dir / "config/obs-studio/basic/scenes" / f"{scene_collection_file}.json"
+    prof_path = obs_dir / "config/obs-studio/basic/profiles" / profile_dir / "basic.ini"
 
     sc = load_scene_collection(sc_path)
     lg.info(f"Loaded scene collection from {sc_path} with {len(sc.get('sources', []))} sources")
@@ -381,6 +444,8 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
 
     print("\nFINDING INPUTS:")
     active_input_devices = get_active_input_devices()
+    for x in active_input_devices:
+        print(f"  Detected input device: {x.FriendlyName} (id: {x.id})")
 
     for device in active_input_devices:
         if device.FriendlyName in input_map:
