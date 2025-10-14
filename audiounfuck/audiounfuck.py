@@ -110,6 +110,72 @@ def set_app_default_device(device_id: str, executable_name: str) -> bool:
         return False
 
 
+# Okay, so this is... stupid. That word is probably insufficient, but it's the
+# best I have right now. Basically, windows lets you have audio settings that
+# are per-application-per-device, so you can do things like "the VR-4HD audio
+# output is muted, but only for OBS". Which is potentially useful, but there's
+# a problem: WINDOWS DOESN'T LET YOU SEE OR MANAGE THESE SETTINGS ANYWHERE.
+# If you somehow end up with OBS's monitoring device muted, not only do you
+# get no monitoring audio, but it's also basically impossible to figure out
+# why it's missing, and it's basically impossible to fix. You end up needing
+# to use a third-party tool, like NirSoft's AppAudioConfig, to see and change
+# this kind of broken condition.
+#
+# So that's what this function does, it uses nirsoft's tool to unmute
+# all the app-specific audio outputs for obs64.exe, and set them to 100%
+# volume.
+#
+# Fuck my life.
+def unfuck_obs_app_audio() -> bool:
+    try:
+        # Construct & run the AppAudioConfig command
+        cmd_path = get_extractdir() / "AppAudioConfig.exe"
+        cmd = [str(cmd_path), "/Unmute", "obs64.exe"]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        lg.debug(f"Command executed: {' '.join(cmd)}")
+        lg.debug(f"Command stdout: {result.stdout}")
+
+        print(f"  Unmuted all obs64.exe app-specific audio outputs")
+
+    except subprocess.CalledProcessError as e:
+        lg.error(f"Failed to unmute all obs64.exe app-specific audio outputs with AppAudioConfig: {e}")
+        lg.error(f"Command output: {e.stdout}")
+        lg.error(f"Command error: {e.stderr}")
+        return False
+    except FileNotFoundError:
+        lg.error("AppAudioConfig executable not found in PATH")
+        return False
+    except Exception as e:
+        lg.error(f"Unexpected error unmuting all obs64.exe app-specific audio devices: {e}")
+        return False
+
+
+    try:
+        # Construct & run another AppAudioConfig command
+        cmd_path = get_extractdir() / "AppAudioConfig.exe"
+        cmd = [str(cmd_path), "/SetVolume", "100", "obs64.exe"]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        lg.debug(f"Command executed: {' '.join(cmd)}")
+        lg.debug(f"Command stdout: {result.stdout}")
+
+        print(f"  Set all obs64.exe app-specific audio outputs to 100% volume")
+
+    except subprocess.CalledProcessError as e:
+        lg.error(f"Failed to set volume on all obs64.exe app-specific audio outputs with AppAudioConfig: {e}")
+        lg.error(f"Command output: {e.stdout}")
+        lg.error(f"Command error: {e.stderr}")
+        return False
+    except FileNotFoundError:
+        lg.error("AppAudioConfig executable not found in PATH")
+        return False
+    except Exception as e:
+        lg.error(f"Unexpected error setting volume on all obs64.exe app-specific audio devices: {e}")
+        return False
+
+    return True
+
 # scene collection wrangling
 def load_scene_collection(file: Path) -> Dict[str, Any]:
     try:
@@ -152,8 +218,47 @@ def find_source_by_name(sc: dict[str, Any], sourcename: str) -> Optional[dict[st
     return None
 
 
-# profile wrangling
-# FIXME: Do we actually need to convert this to a dict?
+# Load the global profile (I don't know what this is *actually* called in OBS,
+# heh) to figure out what the active profile and scene collection are, so we
+# can manipulate them.
+def load_global_profile(obs_dir: Path) -> Tuple[str, str]:
+    """Read OBS global.ini to get the actual ProfileDir and SceneCollectionFile being used."""
+    global_ini_path = obs_dir / "config/obs-studio/global.ini"
+
+    try:
+        # Disable interpolation to handle % characters in values
+        config = configparser.ConfigParser(interpolation=None)
+        config.optionxform = str  # don't lowercase keys
+        # Explicitly open with UTF-8 encoding to handle BOM
+        with global_ini_path.open('r', encoding='utf-8-sig') as f:
+            config.read_file(f)
+
+        # Extract the ProfileDir and SceneCollectionFile from [Basic] section
+        basic_section = config['Basic']
+        profile_dir = basic_section.get('ProfileDir')
+        scene_collection_file = basic_section.get('SceneCollectionFile')
+
+        if not profile_dir:
+            raise ValueError("ProfileDir not found in global.ini [Basic] section")
+        if not scene_collection_file:
+            raise ValueError("SceneCollectionFile not found in global.ini [Basic] section")
+
+        lg.debug(f"Found ProfileDir: {profile_dir}")
+        lg.debug(f"Found SceneCollectionFile: {scene_collection_file}")
+
+        return profile_dir, scene_collection_file
+
+    except FileNotFoundError:
+        lg.error(f"OBS global.ini file not found: {global_ini_path}")
+        raise
+    except configparser.Error as e:
+        lg.error(f"Error parsing global.ini file: {e}")
+        raise
+    except KeyError as e:
+        lg.error(f"Missing section or key in global.ini: {e}")
+        raise
+
+
 def load_profile(file: Path) -> dict[str, Any]:
     try:
         # Disable interpolation to handle % characters in values
@@ -230,44 +335,6 @@ def load_config(config_path: Path, hostname: Optional[str] = None) -> dict[str, 
         raise
     except Exception as e:
         lg.error(f"Error loading configuration: {e}")
-        raise
-
-
-def read_obs_global_profile(obs_dir: Path) -> Tuple[str, str]:
-    """Read OBS global.ini to get the actual ProfileDir and SceneCollectionFile being used."""
-    global_ini_path = obs_dir / "config/obs-studio/global.ini"
-
-    try:
-        # Disable interpolation to handle % characters in values
-        config = configparser.ConfigParser(interpolation=None)
-        config.optionxform = str  # don't lowercase keys
-        # Explicitly open with UTF-8 encoding to handle BOM
-        with global_ini_path.open('r', encoding='utf-8-sig') as f:
-            config.read_file(f)
-
-        # Extract the ProfileDir and SceneCollectionFile from [Basic] section
-        basic_section = config['Basic']
-        profile_dir = basic_section.get('ProfileDir')
-        scene_collection_file = basic_section.get('SceneCollectionFile')
-
-        if not profile_dir:
-            raise ValueError("ProfileDir not found in global.ini [Basic] section")
-        if not scene_collection_file:
-            raise ValueError("SceneCollectionFile not found in global.ini [Basic] section")
-
-        lg.debug(f"Found ProfileDir: {profile_dir}")
-        lg.debug(f"Found SceneCollectionFile: {scene_collection_file}")
-
-        return profile_dir, scene_collection_file
-
-    except FileNotFoundError:
-        lg.error(f"OBS global.ini file not found: {global_ini_path}")
-        raise
-    except configparser.Error as e:
-        lg.error(f"Error parsing global.ini file: {e}")
-        raise
-    except KeyError as e:
-        lg.error(f"Missing section or key in global.ini: {e}")
         raise
 
 
@@ -414,12 +481,13 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
 
     # Read OBS global.ini to get the actual profile directory and scene collection file
     try:
-        profile_dir, scene_collection_file = read_obs_global_profile(obs_dir)
+        profile_dir, scene_collection_file = load_global_profile(obs_dir)
         lg.info(f"Found active OBS profile: {profile_dir}")
         lg.info(f"Found active OBS scene collection: {scene_collection_file}")
     except Exception as e:
         lg.error(f"Failed to read OBS global configuration: {e}")
         sys.exit(1)
+
 
     # Extract configuration values
     input_map = config['inputs'] or {}
@@ -561,8 +629,12 @@ def unfuck(args: argparse.Namespace) -> Tuple[int, int, List[str]]:
     for assignment in final_devices:
         endtext += f"  {assignment}\n"
 
+    print("\n\n===== FIXING APP-SPECIFIC AUDIO STUPIDITY =====")
+    unfuck_obs_app_audio()
+
     print(endtext)
     lg.debug(endtext)
+
 
     # Clean up old log files if --logdir is specified
     if args.logdir:

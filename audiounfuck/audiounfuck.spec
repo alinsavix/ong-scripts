@@ -5,6 +5,7 @@ a = Analysis(
     pathex=[],
     binaries=[
         ("svcl.exe", "."),
+        ("AppAudioConfig.exe", "."),
     ],
     datas=[("icons8-audio-100.ico", "icons8-audio-100.ico")],
     hiddenimports=[],
