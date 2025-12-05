@@ -19,6 +19,7 @@ from peewee import (SQL, AutoField, BigIntegerField, CharField, DateTimeField,
                     FloatField, IntegerField, Model, SqliteDatabase, TextField)
 from playhouse.sqlite_ext import (FTS5Model, RowIDField, SearchField,
                                   SqliteExtDatabase)
+from rapidfuzz import fuzz, process
 from tdvutil import ppretty
 from tdvutil.argparse import CheckFile
 
@@ -98,6 +99,44 @@ def get_ongcode_meta(key: str) -> Optional[str]:
     return None
 
 
+def load_title_cache() -> List[tuple[int, str]]:
+    """Load all titles from the database into memory for fuzzy matching."""
+    query = OngCode.select(OngCode.mainmsg_id, OngCode.titlemsg_text).where(
+        OngCode.titlemsg_text.is_null(False)
+    )
+    return [(row.mainmsg_id, row.titlemsg_text) for row in query]
+
+
+def search_titles(query_str: str, title_cache: List[tuple[int, str]], limit: int = 100) -> List[tuple[int, str, float]]:
+    """Search titles using fuzzy matching and return results with scores.
+
+    Returns:
+        List of tuples: (mainmsg_id, title, score) sorted by score descending
+    """
+    if not title_cache:
+        return []
+
+    # Extract just the titles for fuzzy matching
+    titles = [title for _, title in title_cache]
+
+    # Use rapidfuzz to find best matches
+    # scorer=fuzz.partial_ratio is good for partial matching
+    matches = process.extract(
+        query_str,
+        titles,
+        scorer=fuzz.partial_ratio,
+        limit=limit
+    )
+
+    # Convert back to (mainmsg_id, title, score) format
+    results = []
+    for matched_title, score, idx in matches:
+        mainmsg_id = title_cache[idx][0]
+        results.append((mainmsg_id, matched_title, score))
+
+    return results
+
+
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
     sys.stderr.flush()
@@ -120,6 +159,7 @@ class OngcodeBot(discord.Bot):
     last_nonid_msg_id: int
     last_nonid_msg_date: datetime.datetime
     caught_up: bool = False
+    title_cache: List[tuple[int, str]]  # List of (mainmsg_id, title)
 
     def __init__(self, botargs: argparse.Namespace):
         self.botargs = botargs
@@ -130,6 +170,11 @@ class OngcodeBot(discord.Bot):
 
         self.last_nonid_msg_id = int(lnm_id)
         self.last_nonid_msg_date = datetime.datetime.fromisoformat(lnm_date)
+
+        # Load all titles into memory for fuzzy matching
+        log("INFO: Loading title database into memory...")
+        self.title_cache = load_title_cache()
+        log(f"INFO: Loaded {len(self.title_cache)} titles into memory")
 
         intents = discord.Intents.default()
         # intents.presences = True
@@ -252,6 +297,19 @@ class OngcodeBot(discord.Bot):
                 title=ongcode.titlemsg_text
             )
 
+        # Update in-memory cache
+        cache_updated = False
+        for i, (cache_id, _) in enumerate(self.title_cache):
+            if cache_id == ongcode.mainmsg_id:
+                # Update existing entry
+                self.title_cache[i] = (ongcode.mainmsg_id, ongcode.titlemsg_text)
+                cache_updated = True
+                break
+        
+        if not cache_updated:
+            # Add new entry to cache
+            self.title_cache.append((ongcode.mainmsg_id, ongcode.titlemsg_text))
+
         log(f"INFO: saved ongcode identifier '{ongcode.titlemsg_text}' for ongcode message {ongcode.mainmsg_id}")
 
         # reset so that we don't process the same ongcode message twice
@@ -290,6 +348,94 @@ def get_credentials(cfgfile: Path, environment: str) -> Dict[str, str]:
     except KeyError:
         log(f"ERROR: no configuration for ongcode_bot.{environment} in credentials file")
         sys.exit(1)
+
+
+def benchmark_search(title_cache: List[tuple[int, str]]) -> None:
+    """Run benchmark tests on the search functionality."""
+    import random
+
+    log("INFO: Starting search benchmark...")
+    log(f"INFO: Title cache size: {len(title_cache)} entries")
+
+    # Get a sample of titles to use as search queries
+    if len(title_cache) < 100:
+        sample_size = len(title_cache)
+    else:
+        sample_size = 100
+
+    sample_titles = random.sample(title_cache, sample_size)
+
+    # Test with exact matches
+    log("\nINFO: Testing exact title matches...")
+    start_time = time.time()
+    for _, title in sample_titles:
+        _ = search_titles(title, title_cache, limit=10)
+    exact_time = time.time() - start_time
+
+    log(f"INFO: Exact matches: {sample_size} searches in {exact_time:.3f}s")
+    log(f"INFO: Average time per search: {(exact_time / sample_size) * 1000:.2f}ms")
+
+    # Test with partial matches (first 3 words)
+    log("\nINFO: Testing partial title matches...")
+    start_time = time.time()
+    for _, title in sample_titles:
+        partial = ' '.join(title.split()[:3]) if len(title.split()) > 3 else title
+        _ = search_titles(partial, title_cache, limit=10)
+    partial_time = time.time() - start_time
+
+    log(f"INFO: Partial matches: {sample_size} searches in {partial_time:.3f}s")
+    log(f"INFO: Average time per search: {(partial_time / sample_size) * 1000:.2f}ms")
+
+    # Test with single word searches
+    log("\nINFO: Testing single word searches...")
+    start_time = time.time()
+    for _, title in sample_titles:
+        single_word = title.split()[0] if title.split() else title
+        _ = search_titles(single_word, title_cache, limit=10)
+    single_time = time.time() - start_time
+
+    log(f"INFO: Single word searches: {sample_size} searches in {single_time:.3f}s")
+    log(f"INFO: Average time per search: {(single_time / sample_size) * 1000:.2f}ms")
+
+    # Overall statistics
+    total_searches = sample_size * 3
+    total_time = exact_time + partial_time + single_time
+    log(f"\nINFO: Overall: {total_searches} total searches in {total_time:.3f}s")
+    log(f"INFO: Overall average time per search: {(total_time / total_searches) * 1000:.2f}ms")
+
+
+def test_search_cli(query: str, title_cache: List[tuple[int, str]]) -> None:
+    """Perform a test search from the command line without Discord."""
+    log(f"INFO: Searching for: '{query}'")
+    log(f"INFO: Title cache size: {len(title_cache)} entries\n")
+
+    start_time = time.time()
+    results = search_titles(query, title_cache, limit=20)
+    search_time = time.time() - start_time
+
+    log(f"INFO: Search completed in {search_time * 1000:.2f}ms")
+    log(f"INFO: Found {len(results)} matches\n")
+
+    if not results:
+        print("No matches found.")
+        return
+
+    # Fetch full records for display
+    matched_ids = [msg_id for msg_id, _, _ in results]
+    records = {row.mainmsg_id: row for row in OngCode.select().where(OngCode.mainmsg_id.in_(matched_ids))}
+
+    print("Top matches:")
+    print("-" * 80)
+    for i, (msg_id, title, score) in enumerate(results[:10], 1):
+        record = records.get(msg_id)
+        if record:
+            # Handle both datetime objects and strings
+            if isinstance(record.mainmsg_date, str):
+                date_obj = datetime.datetime.fromisoformat(record.mainmsg_date)
+                date_str = date_obj.strftime("%Y-%m-%d")
+            else:
+                date_str = record.mainmsg_date.strftime("%Y-%m-%d")
+            print(f"{i:2d}. [{score:5.1f}] {date_str} - {title}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -353,6 +499,21 @@ def parse_args() -> argparse.Namespace:
         help="print all queries to stderr",
     )
 
+    parser.add_argument(
+        "--benchmark",
+        default=False,
+        action="store_true",
+        help="run search benchmark and exit",
+    )
+
+    parser.add_argument(
+        "--test-search",
+        type=str,
+        default=None,
+        metavar="QUERY",
+        help="perform a test search without connecting to Discord",
+    )
+
     parsed_args = parser.parse_args()
 
     if parsed_args.credentials_file is None:
@@ -409,6 +570,22 @@ def main():
         set_ongcode_meta("last_nonid_msg_date", str(lnm_date))
         set_ongcode_meta("last_nonid_msg_id", str(0))
 
+    # Handle benchmark mode
+    if args.benchmark:
+        log("INFO: Running in benchmark mode")
+        title_cache = load_title_cache()
+        log(f"INFO: Loaded {len(title_cache)} titles into memory")
+        benchmark_search(title_cache)
+        return
+
+    # Handle test search mode
+    if args.test_search:
+        log("INFO: Running in test search mode")
+        title_cache = load_title_cache()
+        log(f"INFO: Loaded {len(title_cache)} titles into memory")
+        test_search_cli(args.test_search, title_cache)
+        return
+
     bot = OngcodeBot(botargs=args)
 
     # @bot.slash_command(name="ping", description="Ping the bot.")
@@ -425,23 +602,26 @@ def main():
         # await asyncio.sleep(1)
         log(f"SEARCH: '{title}'")
 
-        # Save ourselves some grief with special characters
-        title = FTS5Model.clean_query(title)
+        # Use fuzzy matching on in-memory title cache
+        search_results = search_titles(title, bot.title_cache, limit=100)
 
-        # this query was SO incredibly painful to figure out. Hint: You can't
-        # use OngCodeIndex.search() here, even though the docs for peewee's
-        # FTS5Model only list .search() as a class method. That's effectively
-        # an entire query unto itself, though, so we have to use match() and
-        # do the ranking ourselves
-        q = (
-            OngCode
-            .select(OngCode, OngCodeIndex.rank().alias("score"))
-            .join(OngCodeIndex, on=(OngCode.mainmsg_id == OngCodeIndex.rowid))
-            .where(OngCodeIndex.match(title))
-            .order_by(OngCodeIndex.rank())
-        )
+        log(f"SEARCH RESULT COUNT: {len(search_results)}")
 
-        log(f"SEARCH RESULT COUNT: {len(q)}")
+        # Fetch full OngCode records for the matched IDs
+        if search_results:
+            matched_ids = [msg_id for msg_id, _, _ in search_results]
+            q = list(OngCode.select().where(OngCode.mainmsg_id.in_(matched_ids)))
+
+            # Create a lookup dict for scores and preserve order
+            score_map = {msg_id: score for msg_id, _, score in search_results}
+            id_order = {msg_id: idx for idx, (msg_id, _, _) in enumerate(search_results)}
+
+            # Sort q by the original search result order and attach scores
+            q.sort(key=lambda row: id_order.get(row.mainmsg_id, 999999))
+            for row in q:
+                row.score = score_map.get(row.mainmsg_id, 0)
+        else:
+            q = []
 
         if discord.utils.get(ctx.author.roles, name=args.moderator_role):
             is_mod = True
@@ -467,9 +647,9 @@ def main():
 
                 msg_url = f"https://discord.com/channels/{bot_guild.id}/{bot_channel.id}/{row.mainmsg_id}"
                 if is_mod:
-                    response = f"{msg_url} - `{rowdate}` - {row.titlemsg_text} (score: {abs(row.score):.2f})\n"
+                    response = f"{msg_url} - `{rowdate}` - {row.titlemsg_text} (score: {row.score:.2f})\n"
                 else:
-                    response = f"`{rowdate}` - {row.titlemsg_text} (score: {abs(row.score):.2f})\n"
+                    response = f"`{rowdate}` - {row.titlemsg_text} (score: {row.score:.2f})\n"
 
                 response_all += response
 
