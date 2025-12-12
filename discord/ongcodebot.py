@@ -4,13 +4,12 @@ import asyncio
 import datetime
 import io
 import os
-import pprint
 import re
 import sys
 import time
 from datetime import timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import aiohttp
 import toml
@@ -99,28 +98,23 @@ def get_ongcode_meta(key: str) -> Optional[str]:
     return None
 
 
-def load_title_cache() -> List[tuple[int, str]]:
-    """Load all titles from the database into memory for fuzzy matching."""
+def load_title_cache() -> List[Tuple[int, str]]:
     query = OngCode.select(OngCode.mainmsg_id, OngCode.titlemsg_text).where(
         OngCode.titlemsg_text.is_null(False)
     )
     return [(row.mainmsg_id, row.titlemsg_text) for row in query]
 
 
-def search_titles(query_str: str, title_cache: List[tuple[int, str]], limit: int = 100) -> List[tuple[int, str, float]]:
-    """Search titles using fuzzy matching and return results with scores.
-
-    Returns:
-        List of tuples: (mainmsg_id, title, score) sorted by score descending
-    """
+def search_titles(query_str: str, title_cache: List[Tuple[int, str]], limit: int = 100) -> List[Tuple[int, str, float]]:
     if not title_cache:
         return []
 
     # Extract just the titles for fuzzy matching
+    # FIXME: Can we do this without copying all the title data every time?
     titles = [title for _, title in title_cache]
 
-    # Use rapidfuzz to find best matches
-    # scorer=fuzz.partial_ratio is good for partial matching
+    # Testing says fuzz.partial_ratio is the best scorer for our purposes,
+    # even though it's not particularly great.
     matches = process.extract(
         query_str,
         titles,
@@ -159,7 +153,7 @@ class OngcodeBot(discord.Bot):
     last_nonid_msg_id: int
     last_nonid_msg_date: datetime.datetime
     caught_up: bool = False
-    title_cache: List[tuple[int, str]]  # List of (mainmsg_id, title)
+    title_cache: List[Tuple[int, str]]  # List of (mainmsg_id, title)
 
     def __init__(self, botargs: argparse.Namespace):
         self.botargs = botargs
@@ -305,7 +299,7 @@ class OngcodeBot(discord.Bot):
                 self.title_cache[i] = (ongcode.mainmsg_id, ongcode.titlemsg_text)
                 cache_updated = True
                 break
-        
+
         if not cache_updated:
             # Add new entry to cache
             self.title_cache.append((ongcode.mainmsg_id, ongcode.titlemsg_text))
@@ -350,8 +344,7 @@ def get_credentials(cfgfile: Path, environment: str) -> Dict[str, str]:
         sys.exit(1)
 
 
-def benchmark_search(title_cache: List[tuple[int, str]]) -> None:
-    """Run benchmark tests on the search functionality."""
+def benchmark_search(title_cache: List[Tuple[int, str]]) -> None:
     import random
 
     log("INFO: Starting search benchmark...")
@@ -404,8 +397,7 @@ def benchmark_search(title_cache: List[tuple[int, str]]) -> None:
     log(f"INFO: Overall average time per search: {(total_time / total_searches) * 1000:.2f}ms")
 
 
-def test_search_cli(query: str, title_cache: List[tuple[int, str]]) -> None:
-    """Perform a test search from the command line without Discord."""
+def search_cli(query: str, title_cache: List[Tuple[int, str]]) -> None:
     log(f"INFO: Searching for: '{query}'")
     log(f"INFO: Title cache size: {len(title_cache)} entries\n")
 
@@ -424,9 +416,9 @@ def test_search_cli(query: str, title_cache: List[tuple[int, str]]) -> None:
     matched_ids = [msg_id for msg_id, _, _ in results]
     records = {row.mainmsg_id: row for row in OngCode.select().where(OngCode.mainmsg_id.in_(matched_ids))}
 
-    print("Top matches:")
+    print("All matches:")
     print("-" * 80)
-    for i, (msg_id, title, score) in enumerate(results[:10], 1):
+    for i, (msg_id, title, score) in enumerate(results, 1):
         record = records.get(msg_id)
         if record:
             # Handle both datetime objects and strings
@@ -507,11 +499,11 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "--test-search",
+        "--search",
         type=str,
         default=None,
         metavar="QUERY",
-        help="perform a test search without connecting to Discord",
+        help="perform a search without connecting to Discord",
     )
 
     parsed_args = parser.parse_args()
@@ -578,12 +570,12 @@ def main():
         benchmark_search(title_cache)
         return
 
-    # Handle test search mode
-    if args.test_search:
-        log("INFO: Running in test search mode")
+    # Handle search mode
+    if args.search:
+        log("INFO: Running in search mode")
         title_cache = load_title_cache()
         log(f"INFO: Loaded {len(title_cache)} titles into memory")
-        test_search_cli(args.test_search, title_cache)
+        search_cli(args.search, title_cache)
         return
 
     bot = OngcodeBot(botargs=args)
@@ -604,6 +596,9 @@ def main():
 
         # Use fuzzy matching on in-memory title cache
         search_results = search_titles(title, bot.title_cache, limit=100)
+
+        # Filter to only matches with 60% or better score
+        search_results = [(msg_id, title_text, score) for msg_id, title_text, score in search_results if score >= 60]
 
         log(f"SEARCH RESULT COUNT: {len(search_results)}")
 
@@ -742,44 +737,6 @@ def main():
                 log(f"WARNING: Error sending ongcode to Jon! (id {ongcode.mainmsg_id} / Title: {title})")
                 log(f"WARNING: {str(e)}")
                 await message_obj.edit(content=f"Error sending ongcode: {str(e)}")
-
-        # Keep existing debug printing
-        # print(ppretty(ctx))
-        # print(ppretty(message))
-        # print(f"ZOT: {ctx.author.id}")
-        # print(f"ZOT: {message.author.id}")
-
-
-    # A couple of testing things
-    # class MyModal(discord.ui.Modal):
-    #     def __init__(self, *args, **kwargs) -> None:
-    #         super().__init__(*args, **kwargs)
-
-    #         self.add_item(discord.ui.InputText(label="Short Input"))
-    #         self.add_item(discord.ui.InputText(
-    #             label="Long Input", style=discord.InputTextStyle.long))
-
-    #     async def callback(self, interaction: discord.Interaction):
-    #         embed = discord.Embed(title="Modal Results")
-    #         embed.add_field(name="Short Input", value=self.children[0].value)
-    #         embed.add_field(name="Long Input", value=self.children[1].value)
-    #         await interaction.response.send_message(embeds=[embed])
-
-    # class MyView(discord.ui.View):
-    #     @discord.ui.button(label="Send Modal")
-    #     async def button_callback(self, button, interaction):
-    #         await interaction.response.send_modal(MyModal(title="Modal via Button"))
-
-    # @bot.slash_command()
-    # async def send_modal(ctx):
-    #     await ctx.respond(view=MyView())
-
-    # creates a global message command. use guild_ids=[] to create guild-specific commands.
-    # @bot.message_command(name="interaction_test")
-    # async def interaction_test(ctx, message: discord.Message):  # message commands return the message
-    #     modal = MyModal(title="Modal via Message Command")
-    #     await ctx.send_modal(modal)
-
 
     bot.run(creds["token"])
 
