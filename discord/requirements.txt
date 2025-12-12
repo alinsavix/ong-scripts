@@ -1,8 +1,11 @@
+aiohttp
 py-cord
+audioop-lts
 tdvutil
 toml
 peewee
 more-itertools
+rapidfuzz
 mypy
 types-peewee
 types-toml
@@ -17,7 +20,7 @@ flake8-bugbear
 flake8-builtins
 flake8-comprehensions
 flake8-import-conventions
-Flake8-pyproject
+flake8-pyproject
 flake8-secure-coding-standard
 flake8_simplify
 flake8-use-pathlib
