@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import aiohttp
+import rapidfuzz
 import toml
 from more_itertools import ichunked
 from peewee import (SQL, AutoField, BigIntegerField, CharField, DateTimeField,
                     FloatField, IntegerField, Model, SqliteDatabase, TextField)
 from playhouse.sqlite_ext import (FTS5Model, RowIDField, SearchField,
                                   SqliteExtDatabase)
-from rapidfuzz import fuzz, process
 from tdvutil import ppretty
 from tdvutil.argparse import CheckFile
 
@@ -115,10 +115,12 @@ def search_titles(query_str: str, title_cache: List[Tuple[int, str]], limit: int
 
     # Testing says fuzz.partial_ratio is the best scorer for our purposes,
     # even though it's not particularly great.
-    matches = process.extract(
+    # Use default_process for case-insensitive matching
+    matches = rapidfuzz.process.extract(
         query_str,
         titles,
-        scorer=fuzz.partial_ratio,
+        scorer=rapidfuzz.fuzz.partial_ratio,
+        processor=rapidfuzz.utils.default_process,
         limit=limit
     )
 
@@ -397,12 +399,19 @@ def benchmark_search(title_cache: List[Tuple[int, str]]) -> None:
     log(f"INFO: Overall average time per search: {(total_time / total_searches) * 1000:.2f}ms")
 
 
-def search_cli(query: str, title_cache: List[Tuple[int, str]]) -> None:
+def search_cli(query: str, title_cache: List[Tuple[int, str]], min_score: float = -1) -> None:
     log(f"INFO: Searching for: '{query}'")
-    log(f"INFO: Title cache size: {len(title_cache)} entries\n")
+    log(f"INFO: Title cache size: {len(title_cache)} entries")
+    log(f"INFO: Minimum score threshold: {min_score:.1f}\n")
+
+    if min_score < 0:
+        search_limit = 20
+    else:
+        search_limit = 100000
 
     start_time = time.time()
-    results = search_titles(query, title_cache, limit=20)
+    results = search_titles(query, title_cache, limit=search_limit)
+    results = [(msg_id, title, score) for msg_id, title, score in results if score >= min_score]
     search_time = time.time() - start_time
 
     log(f"INFO: Search completed in {search_time * 1000:.2f}ms")
@@ -506,6 +515,14 @@ def parse_args() -> argparse.Namespace:
         help="perform a search without connecting to Discord",
     )
 
+    parser.add_argument(
+        "--search-pct",
+        type=float,
+        default=None,
+        metavar="MIN_SCORE",
+        help="minimum score percentage (0-100) for search results (use with --search)",
+    )
+
     parsed_args = parser.parse_args()
 
     if parsed_args.credentials_file is None:
@@ -575,7 +592,8 @@ def main():
         log("INFO: Running in search mode")
         title_cache = load_title_cache()
         log(f"INFO: Loaded {len(title_cache)} titles into memory")
-        search_cli(args.search, title_cache)
+        min_score = args.search_pct if args.search_pct is not None else -1.0
+        search_cli(args.search, title_cache, min_score=min_score)
         return
 
     bot = OngcodeBot(botargs=args)
