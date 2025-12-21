@@ -236,15 +236,16 @@ def main(argv: List[str]) -> int:
         # Skip tier 3 resub songs when making timestamps. Ideally we'd
         # auto-skip warmup songs and such as well, but we don't have a
         # really good way to identify those.
-        if len(row) > Col.LINKS and "tier 3" in row[Col.LINKS].lower():
-            continue
+        if len(row) > Col.LINKS:
+            if row[Col.LINKS].strip().lower() in ["tier 3", "tier3", "credits"]:
+                continue
 
         if not args.concert_grand:
             if not in_concert_grand:
-                if len(row) > Col.LINKS and (
-                    "concert grand" in row[Col.LINKS].lower() or
-                    "concert grand" in row[Col.TITLE].lower()
-                ):
+                if any([
+                    (len(row) > Col.LINKS and "concert grand" in row[Col.LINKS].lower()),
+                    (len(row) > Col.TITLE and "concert grand" in row[Col.TITLE].lower())
+                ]):
                     in_concert_grand = True
                     has_concert_grand = True
                     print(f"{start_time_hms} Concert Grand")
