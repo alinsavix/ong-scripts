@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env -S uv run --script
 import argparse
 import asyncio
 import datetime
@@ -11,6 +11,9 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import discord
+from discord.ext import pages
+
 import aiohttp
 import rapidfuzz
 import toml
@@ -21,9 +24,6 @@ from playhouse.sqlite_ext import (FTS5Model, RowIDField, SearchField,
                                   SqliteExtDatabase)
 from tdvutil import ppretty
 from tdvutil.argparse import CheckFile
-
-import discord
-from discord.ext import pages
 
 MATCH_LIMIT = 10
 # aiosqlite

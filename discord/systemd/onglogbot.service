@@ -10,8 +10,7 @@ Group=ongmod
 Environment="BASEDIR=/home/ongbots/ong-scripts/discord"
 
 # Sucks that we can't use $BASEDIR in the executable path :(
-ExecStart=/home/ongbots/ong-scripts/discord/venv/bin/python3 "${BASEDIR}/onglogbot.py" --env xxxx
-
+ExecStart=/bin/bash -c "cd '${BASEDIR}' &&  UV_PYTHON_DOWNLOADS=auto /usr/sbin/uv run --script --verbose '${BASEDIR}/onglogbot.py' --environment xxx"
 Restart=on-failure
 RestartSec=300s
 
