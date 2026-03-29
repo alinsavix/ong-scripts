@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import argparse
+import asyncio
 import io
 import json
 import os
@@ -10,6 +11,10 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
+
+import discord
+from discord.commands import SlashCommandGroup
+from discord.ext import commands, pages
 
 import dateparser
 import gspread
@@ -23,10 +28,6 @@ from playhouse.sqlite_ext import (FTS5Model, RowIDField, SearchField,
                                   SqliteExtDatabase)
 from tdvutil import hms_to_sec, ppretty
 from tdvutil.argparse import CheckFile
-
-import discord
-from discord.commands import SlashCommandGroup
-from discord.ext import commands, pages
 
 # NOTE: You will need to set up a file with your google cloud credentials
 # as noted in the documentation for the "gspread" module
@@ -413,7 +414,7 @@ class OnglogBot(discord.Bot):
         # intents.typing = True
         # intents.members = True
 
-        super().__init__(intents=intents)   # , status=discord.Status.invisible)
+        super().__init__(intents=intents, loop=asyncio.new_event_loop())   # , status=discord.Status.invisible)
 
     async def on_ready(self):
         # print(ppretty(self))
