@@ -198,8 +198,10 @@ def onglog_update(args: argparse.Namespace):
 def onglog_update_main(onglog_file: Path):
     # By saying no header, it means we can keep the onglong row number equal
     # to the pd row number + 1
-    df = pd.read_excel(onglog_file, header=None, sheet_name="Songs", names=[
-                    "Date", "Uptime", "Order", "Requester", "Title", "Genre", "Type", "Links", "Looper", "FileNum"])
+    _SONG_COLUMNS = ["Date", "Uptime", "Order", "Requester", "Title", "Genre", "Type", "Links", "Looper", "FileNum"]
+    df = pd.read_excel(onglog_file, header=None, sheet_name="Songs")
+    df = df.iloc[:, :len(_SONG_COLUMNS)]
+    df.columns = _SONG_COLUMNS
 
     last_processed_row = get_onglog_meta("last_processed_row")
 
@@ -217,7 +219,7 @@ def onglog_update_main(onglog_file: Path):
     valid_rows = order_zero_rows[order_zero_rows.index >= start_row_num - 1]
     start_index = valid_rows.index.min() if not valid_rows.empty else None
 
-    if not start_index:
+    if start_index is None:
         log(f"INFO: No rows with 'Order' value of 0 found after row {start_row_num}. Using EARLIEST_ROW as starting point.")
         start_index = EARLIEST_ROW - 1
     else:
@@ -323,8 +325,10 @@ def onglog_update_main(onglog_file: Path):
 def onglog_update_highlights(onglog_file: Path):
     # By saying no header, it means we can keep the onglong row number equal
     # to the pd row number + 1
-    df = pd.read_excel(onglog_file, header=None, sheet_name="Youtube Catalogue", names=[
-        "Date", "Order", "Title", "Genre", "Link", "Requester", "Original Date", "Vocals", "Notes"])
+    _HIGHLIGHT_COLUMNS = ["Date", "Order", "Title", "Genre", "Link", "Requester", "Original Date", "Vocals", "Adult", "Notes"]
+    df = pd.read_excel(onglog_file, header=None, sheet_name="Youtube Catalogue")
+    df = df.iloc[:, :len(_HIGHLIGHT_COLUMNS)]
+    df.columns = _HIGHLIGHT_COLUMNS
 
     last_processed_row = get_onglog_meta("last_processed_highlight_row")
 
