@@ -1,6 +1,14 @@
 PYINSTALLER_BIN ?= pyinstaller
 SPEC ?= obsstats.spec
 
+.PHONY: install
+install:
+	pip install -e .
+
+.PHONY: install-build
+install-build:
+	pip install -e .[build]
+
 .PHONY: dist
 dist:
 	$(PYINSTALLER_BIN) $(SPEC)
