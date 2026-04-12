@@ -14,10 +14,10 @@ classifiers = [
 
 requires-python = ">=3.13, <4.0.0"
 
-dependencies = [ "tdvutil>=0.0.6", "obsws_python>=1.7.0" ]
+dependencies = [ "tdvutil>=0.0.6", "simpleobsws>=1.4.0" ]
 
 [project.optional-dependencies]
-build = [ "pyinstaller" ]
+build = [ "pyinstaller", "Pillow" ]
 
 [build-system]
 requires = [ "setuptools>=61.0", "wheel" ]

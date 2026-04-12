@@ -1,38 +1,44 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
 # Do some OBS monitoring things running under inputs.execd in telegraf
 import argparse
+import asyncio
 import logging
 import os
 import re
 import sys
 import time
-from typing import Dict, List, Optional, Union
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
-import obsws_python as obs
-from obsws_python.error import (OBSSDKError, OBSSDKRequestError,
-                                OBSSDKTimeoutError)
+import simpleobsws
 from tdvutil import hms_to_sec, ppretty
-from websocket._exceptions import WebSocketTimeoutException
 
 
-# flush stdin so that we don't have a backlog before we go into our main loop
-def flush_input():
-    try:
-        # For windows
-        import msvcrt
-        while msvcrt.kbhit():
-            msvcrt.getch()
-    except ImportError:
-        import sys
-        import termios  # for linux/unix
-        termios.tcflush(sys.stdin, termios.TCIOFLUSH)
+@dataclass
+class OBSState:
+    """Shared state between OBS monitor task and stdin handler"""
+    connected: bool = False
+    version: str = "unknown"
+    stats: Dict = field(default_factory=dict)
+    outputs: Dict[str, Dict] = field(default_factory=dict)
+    last_update: int = 0
+
+
+DEBUG = False
 
 def now():
     return int(time.time())
 
 def log(msg: str) -> None:
+    """Always log important messages"""
     print(msg, file=sys.stderr)
     sys.stderr.flush()
+
+def debug_log(msg: str) -> None:
+    """Log only when debug mode is enabled"""
+    if DEBUG:
+        print(msg, file=sys.stderr)
+        sys.stderr.flush()
 
 def printmetric(metric_name: str, ts: int, value: int | float, tags: Dict[str, str] | None = None):
     tags_list = ""
@@ -56,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--host",
         type=str,
-        default="localhost",  # 192.168.1.152
+        default="localhost",
         help="address or hostname of host running OBS"
     )
 
@@ -67,143 +73,256 @@ def parse_args() -> argparse.Namespace:
         help="port number for OBS websocket"
     )
 
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="enable debug logging to stderr"
+    )
+
     parsed_args = parser.parse_args()
+
+    # Set global debug flag
+    global DEBUG
+    DEBUG = parsed_args.debug
 
     return parsed_args
 
 
-def main():
-    # make obsws-python not really output any logging on its own
+async def main():
+    # make library logging be quiet
     logging.basicConfig(level=logging.FATAL)
 
     args = parse_args()
 
     while True:
         try:
-            if not run(args):
-                log("Unexpected exit from metrics loop, continuing in 60 seconds.")
+            await run(args)
+            # If run() returns normally (stdin closed), exit cleanly
+            log("stdin closed, exiting program")
+            break
         except KeyboardInterrupt:
             log("Keyboard interrupt, exiting")
-            sys.exit(0)
-        except ConnectionError as e:
-            log(f"OBS connection error, trying again in 60 seconds: {e}")
-        except (Exception) as e:
-            log(f"UNKNOWN EXCEPTION: {ppretty(e)}")
 
-        time.sleep(60)
-
-
-# Returns true if the outer loop shouldn't print an error. Yeah, it's sloppy.
-def run(args: argparse.Namespace) -> bool:
-    try:
-        client = obs.ReqClient(host=args.host, port=args.port, timeout=5)
-        eventclient = obs.EventClient(host=args.host, port=args.port,
-                                      timeout=5, subs=(obs.Subs.GENERAL))
-    except (ConnectionRefusedError, OBSSDKTimeoutError, WebSocketTimeoutException) as e:
-        printmetric("active", now(), 0, {})
-        sys.stdout.flush()
-        return True
-
-    def on_exit_started(data):
-        log("Got OBS exit signal, disconnecting")
-
-        # the clients have 'disconnect' methods, but they don't actually work
-        # when called from an event handler. We really want to disconnect NOW,
-        # though, so we'll just null out the client objects and python will
-        # do its normal cleanup and shut down the connections. Open to better
-        # ideas on how best to handle this.
-        # client = None
-        # eventclient = None
-        # shutdown = True
-
-        # except that didn't work reliably, how about just exit, and let
-        # telegraf or whatever restart us? And we can't even just use exit()
-        # because of the way threads are implemented in obsws
-        os._exit(0)
-
-    eventclient.callback.register(on_exit_started)
-
-    flush_input()
-
-    tags = {}
-    r = client.get_version()
-    tags["version"] = r.obs_version
-    # tags["platform"] = r.platform
-
-    # r = client2.get_scene_collection_list()
-    # tags["scene_collection"] = r.current_scene_collection_name
-
-    count = 0
-    while True:
-        # telegraf will give us a newline whenever it's expecting us to
-        # generate some metrics, and will close that fd when it's time
-        # for us to exit.
-        x = sys.stdin.readline()
-        if len(x) == 0 or sys.stdin.closed:
-            log("stdin closed, exiting")
             printmetric("active", now(), 0, {})
             sys.stdout.flush()
-            os._exit(0)
+            break
+        except ConnectionError as e:
+            log(f"OBS connection error, trying again in 60 seconds: {e}")
+            await asyncio.sleep(60)
+        except Exception as e:
+            log(f"UNKNOWN EXCEPTION: {ppretty(e)}")
+            await asyncio.sleep(60)
 
-        # We only want to occasionally generate metrics for things that aren't
-        # active, so keep a counter of how many times we've been asked for
-        # metrics that we can reference later.
+
+async def obs_monitor_task(args: argparse.Namespace, state: OBSState, shutdown_event: asyncio.Event):
+    """Background task that monitors OBS and updates shared state"""
+    while not shutdown_event.is_set():
+        ws = simpleobsws.WebSocketClient(
+            url=f'ws://{args.host}:{args.port}',
+            password=''
+        )
+
+        try:
+            await ws.connect()
+            await ws.wait_until_identified()
+            state.connected = True
+            debug_log(f"Connected to OBS at {args.host}:{args.port}")
+        except (ConnectionRefusedError, OSError, asyncio.TimeoutError) as e:
+            state.connected = False
+            state.stats = {}
+            state.outputs = {}
+
+            await asyncio.sleep(5)
+            continue
+
+        async def on_exit_started(event_type, event_data):
+            log("Got OBS exit signal, disconnecting")
+            state.connected = False
+            shutdown_event.set()
+
+        ws.register_event_callback(on_exit_started, 'ExitStarted')
+
+        try:
+            request = simpleobsws.Request('GetVersion')
+            ret = await ws.call(request, timeout=5)
+            if ret.ok():
+                state.version = ret.responseData.get("obsVersion", "unknown")
+        except Exception as e:
+            log(f"Failed to get version: {e}")
+            state.version = "unknown"
+
+        # get us some stats regularly
+        while state.connected and not shutdown_event.is_set():
+            try:
+                # main stats
+                request = simpleobsws.Request('GetStats')
+                ret = await ws.call(request, timeout=5)
+                if ret.ok():
+                    state.stats = ret.responseData
+                    state.last_update = now()
+
+                # per-output stats - We're using a fixed list of outputs here,
+                # because OBS was periodically crashing if we iterated the
+                # output list on a regular basis (even if it wasn't changing)
+                outputs = ["simple_stream", "simple_file_output",
+                           "adv_stream", "adv_file_output"]
+                for output_name in outputs:
+                    try:
+                        request = simpleobsws.Request(
+                            'GetOutputStatus', {'outputName': output_name})
+                        ret = await ws.call(request, timeout=5)
+                        if ret.ok():
+                            state.outputs[output_name] = ret.responseData
+                    except Exception:
+                        # Remove from cache if we can't get status
+                        state.outputs.pop(output_name, None)
+
+                # FIXME: make configurable?
+                await asyncio.sleep(15)
+
+            except Exception as e:
+                log(f"Error updating OBS stats: {e}")
+                state.connected = False
+                break
+
+        # If we got here, our connection to OBS is in an unhappy state
+        try:
+            await ws.disconnect()
+        except:
+            pass
+
+        if not shutdown_event.is_set():
+            await asyncio.sleep(5)
+
+
+async def stdin_handler_task(args: argparse.Namespace, state: OBSState, shutdown_event: asyncio.Event):
+    debug_log("stdin_handler_task started")
+
+    stdin_queue = asyncio.Queue()  # queue for stdin lines
+
+    loop = asyncio.get_event_loop()
+
+    # AFAIK there's no decent way to do a non-blocking read of stdin in
+    # python, and definitely not in a cross-platform way, so we'll make
+    # a separate thread for doing those reads.
+    def stdin_reader_thread():
+        try:
+            while not shutdown_event.is_set():
+                line = sys.stdin.readline()
+                if len(line) == 0:
+                    asyncio.run_coroutine_threadsafe(stdin_queue.put(None), loop)
+                    break
+                # Put the line in the queue (not that we actually care about
+                # the content, just the fact that we got a line)
+                asyncio.run_coroutine_threadsafe(stdin_queue.put(line), loop)
+        except Exception as e:
+            log(f"stdin_reader_thread error: {e}")
+            asyncio.run_coroutine_threadsafe(stdin_queue.put(None), loop)
+
+    import threading
+    reader_thread = threading.Thread(target=stdin_reader_thread, daemon=True)
+    reader_thread.start()
+
+    count = 0
+
+    while not shutdown_event.is_set():
+        try:
+            x = await asyncio.wait_for(stdin_queue.get(), timeout=1.0)
+        except asyncio.TimeoutError:
+            # Just keep looping just keep looping
+            continue
+        except Exception as e:
+            log(f"Error reading from stdin queue: {e}")
+            break
+
+        if x is None:
+            log("stdin closed, exiting")
+            shutdown_event.set()
+            break
+
         count += 1
+        debug_log(
+            f"Received request #{count}, connected={state.connected}, last_update={state.last_update}")
 
-        r = client.get_stats()
-        ts = now()
+        ts = state.last_update if state.last_update > 0 else now()
+
+        # Don't output stale data (older than 45 seconds)
+        data_age = now() - state.last_update if state.last_update > 0 else 9999999
+        data_is_stale = data_age >= 45
+
+        if not state.connected or data_is_stale:
+            # no metrics to give, just send active=0 with current timestamp
+            debug_log(
+                f"Emitting active=0 (connected={state.connected}, data_is_stale={data_is_stale})")
+            printmetric("active", now(), 0, {})
+            sys.stdout.flush()
+            continue
+
+        # else we're connected and have current stats
+        debug_log(f"Emitting metrics (age={data_age:.1f}s)")
         printmetric("active", ts, 1, {})
 
-        # Main stats
-        printmetric("usage.cpu_pct", ts, r.cpu_usage, tags)
-        printmetric("usage.memory_mb", ts, r.memory_usage, tags)
-        printmetric("fps", ts, r.active_fps, tags)
-        printmetric("frames.render.time_avg_ms", ts, r.average_frame_render_time, tags)
-        printmetric("frames.render.skipped", ts, r.render_skipped_frames, tags)
-        printmetric("frames.render.total", ts, r.render_total_frames, tags)
-        printmetric("frames.output.skipped", ts, r.output_skipped_frames, tags)
-        printmetric("frames.output.total", ts, r.output_total_frames, tags)
-        printmetric("websocket.messages.incoming", ts,
-                    r.web_socket_session_incoming_messages, tags)
-        printmetric("websocket.messages.outgoing", ts,
-                    r.web_socket_session_outgoing_messages, tags)
+        tags = {"version": state.version}
 
-        # Stats for each output. The ideal here is that we would query the
-        # list of outputs, and then query the status of each, but a recent
-        # OBS crash showed an issue when iterating over the list of outputs,
-        # so we're going to just specify a few outputs that we care about
-        # specifically, and only query those, with the hope we don't trigger
-        # the same crash again.
-        # r = client.get_output_list()
-        # outputs = r.outputs
-        outputs = ["simple_stream", "simple_file_output", "adv_stream", "adv_file_output"]
+        r = state.stats
+        if r:
+            printmetric("usage.cpu_pct", ts, r.get("cpuUsage", 0), tags)
+            printmetric("usage.memory_mb", ts, r.get("memoryUsage", 0), tags)
+            printmetric("fps", ts, r.get("activeFps", 0), tags)
+            printmetric("frames.render.time_avg_ms", ts,
+                        r.get("averageFrameRenderTime", 0), tags)
+            printmetric("frames.render.skipped", ts, r.get("renderSkippedFrames", 0), tags)
+            printmetric("frames.render.total", ts, r.get("renderTotalFrames", 0), tags)
+            printmetric("frames.output.skipped", ts, r.get("outputSkippedFrames", 0), tags)
+            printmetric("frames.output.total", ts, r.get("outputTotalFrames", 0), tags)
+            printmetric("websocket.messages.incoming", ts,
+                        r.get("webSocketSessionIncomingMessages", 0), tags)
+            printmetric("websocket.messages.outgoing", ts,
+                        r.get("webSocketSessionOutgoingMessages", 0), tags)
 
-        for output_name in outputs:
-            try:
-                r = client.get_output_status(output_name)
-            except obs.error.OBSSDKRequestError:
-                continue
-
+        # per-output stats
+        for output_name, output_data in state.outputs.items():
             output_tags = {"output": normalize_name(output_name)}
-            printmetric("output.active", ts, 1 if r.output_active else 0, tags | output_tags)
+            printmetric("output.active", ts, 1 if output_data.get(
+                "outputActive", False) else 0, tags | output_tags)
             printmetric("output.reconnecting", ts,
-                        1 if r.output_reconnecting else 0, tags | output_tags)
+                        1 if output_data.get("outputReconnecting", False) else 0, tags | output_tags)
 
             # no reason to dump stats often for something that's not active or reconnecting
-            if not any([r.output_active, r.output_reconnecting]) and count % 10 > 0:
+            if not any([output_data.get("outputActive", False), output_data.get("outputReconnecting", False)]) and count % 10 > 0:
                 continue
 
-            # FIXME: need to check the format on this. Is it SMPTE? Just HH:MM:SS.sss?
-            # printmetric("output.timecode", ts, hms_to_sec(r.output_timecode), tags | output_tags)
-            printmetric("output.duration_s", ts, r.output_duration / 1000, tags | output_tags)
-            printmetric("output.congestion", ts, r.output_congestion, tags | output_tags)
-            printmetric("output.bytes", ts, r.output_bytes, tags | output_tags)
+            printmetric("output.duration_s", ts, output_data.get(
+                "outputDuration", 0) / 1000, tags | output_tags)
+            printmetric("output.congestion", ts, output_data.get(
+                "outputCongestion", 0), tags | output_tags)
+            printmetric("output.bytes", ts, output_data.get(
+                "outputBytes", 0), tags | output_tags)
             printmetric("output.frames.skipped", ts,
-                        r.output_skipped_frames, tags | output_tags)
-            printmetric("output.frames.total", ts, r.output_total_frames, tags | output_tags)
+                        output_data.get("outputSkippedFrames", 0), tags | output_tags)
+            printmetric("output.frames.total", ts, output_data.get(
+                "outputTotalFrames", 0), tags | output_tags)
 
         sys.stdout.flush()
+
+
+async def run(args: argparse.Namespace):
+    shutdown_event = asyncio.Event()
+    state = OBSState()
+
+    # One task for wrangling OBS, one for wrangling stdin
+    monitor_task = asyncio.create_task(obs_monitor_task(args, state, shutdown_event))
+    stdin_task = asyncio.create_task(stdin_handler_task(args, state, shutdown_event))
+
+    await asyncio.gather(monitor_task, stdin_task)
+
+    printmetric("active", now(), 0, {})
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Clean exit on Ctrl-C, no traceback
+        pass

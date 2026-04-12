@@ -1,4 +1,4 @@
-PYINSTALLER_BIN ?= pyinstaller
+PYINSTALLER_BIN ?= uv run --extra build pyinstaller
 SPEC ?= obsstats.spec
 
 .PHONY: install
