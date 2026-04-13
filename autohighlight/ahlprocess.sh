@@ -60,9 +60,9 @@ ls /ong/recorded/bruce\ * >/dev/null 2>&1 && ./metaremux.py --remux-dest-dir /on
 
 
 # extract the bits of audio/video we care about
-echo "TASK: extract highlights"
-./ahlextract.py --ffmpeg-bin "$FFMPEG_BIN" --dest-dir /ong/autohighlights --source-dir /ong/clean --content-class clean --extra-head 3 --extract-length 120 && chmod 644 /ong/autohighlights/*.mp4 /ong/autohighlights/*.txt
-./ahlextract.py --ffmpeg-bin "$FFMPEG_BIN" --dest-dir /ong/autohighlights --source-dir /ong/stems --content-class stems --extra-head 3 --extract-length 120 && chmod 644 /ong/autohighlights/*.m4a
+echo "SKIPPING: extract highlights"
+# ./ahlextract.py --ffmpeg-bin "$FFMPEG_BIN" --dest-dir /ong/autohighlights --source-dir /ong/clean --content-class clean --extra-head 3 --extract-length 120 && chmod 644 /ong/autohighlights/*.mp4 /ong/autohighlights/*.txt
+# ./ahlextract.py --ffmpeg-bin "$FFMPEG_BIN" --dest-dir /ong/autohighlights --source-dir /ong/stems --content-class stems --extra-head 3 --extract-length 120 && chmod 644 /ong/autohighlights/*.m4a
 
 
 # generate autocrops
