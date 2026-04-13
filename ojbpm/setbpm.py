@@ -15,6 +15,12 @@ from watchdog.events import PatternMatchingEventHandler
 from watchdog.observers import Observer
 
 update_sources: bool = False
+debug: bool = False
+
+def debug_print(msg: str):
+    if debug:
+        print(f"DEBUG: {msg}")
+        sys.stdout.flush()
 
 def sources_update():
     global update_sources
@@ -40,19 +46,29 @@ class BPMHandler(PatternMatchingEventHandler):
         if len(x) < 2:
             print(f"can't read valid data from '{event.src_path}', skipping update")
 
+        debug_print(f"change detected: {event.src_path} -> '{x.rstrip()}'")
+
         if event.src_path.endswith("current_bpm.txt"):
             bpm = float(x)
 
-            print(f"setting BPM to {bpm}:")
-            sys.stdout.flush()
+            if bpm <= 10.0:
+                print(f"BPM of {bpm} seems suspiciously low, not setting")
+            else:
+                print(f"setting BPM to {bpm}:")
+                sys.stdout.flush()
 
-            sources = get_sources(self.args.host, self.args.port, self.args.source_prefix)
-            set_bpm(self.args.host, self.args.port, sources, bpm)
+                sources = get_sources(self.args.host, self.args.port, self.args.source_prefix)
+                set_bpm(self.args.host, self.args.port, sources, bpm)
 
         elif event.src_path.endswith("looper_slot.txt"):
             print(f"setting looper slot number to {x}")
             sys.stdout.flush()
             set_looper_slot(self.args.host, self.args.port, "Looper Slot Number", x)
+
+        elif event.src_path.endswith("playback_start_time.txt"):
+            print(f"setting playback start time to {x.rstrip()}")
+            sys.stdout.flush()
+            send_playback_start(self.args.host, self.args.port, x.rstrip())
 
 
 def on_input_created(data):
@@ -78,6 +94,8 @@ def watch_bpm(args: argparse.Namespace):
                 host=args.host, port=args.port, timeout=5,
                 subs=(obs.Subs.INPUTS)
             )
+            print(f"Connected to OBS at {args.host}:{args.port}")
+            sys.stdout.flush()
         except OSError as e:
             print(f"ERROR (will retry): {e}")
             sys.stdout.flush()
@@ -88,7 +106,8 @@ def watch_bpm(args: argparse.Namespace):
 
     # And now set up the filesystem watch
     path = args.watch_dir
-    event_handler = BPMHandler(args, patterns=["current_bpm.txt", "looper_slot.txt"])
+    event_handler = BPMHandler(
+        args, patterns=["current_bpm.txt", "looper_slot.txt", "playback_start_time.txt"])
 
     observer = Observer()
     observer.schedule(event_handler, path, recursive=False)
@@ -100,6 +119,20 @@ def watch_bpm(args: argparse.Namespace):
     finally:
         observer.stop()
         observer.join()
+
+
+def send_playback_start(host: str, port: int, value: str):
+    with obs.ReqClient(host=host, port=port, timeout=5) as client:
+        try:
+            vendor = "AdvancedSceneSwitcher"
+            vendor_msg = "AdvancedSceneSwitcherMessage"
+            client.call_vendor_request(vendor, vendor_msg, {"message": f"PLAYSTART:{value}"})
+            debug_print(f"vendor request sent: PLAYSTART:{value}")
+            print(f"sent PLAYSTART:{value}")
+        except Exception as e:
+            print(f"WARNING: Failed to send playback start time: {e}")
+
+        sys.stdout.flush()
 
 
 def set_looper_slot(host: str, port: int, source: str, slot: str):
@@ -130,6 +163,9 @@ def set_bpm(host: str, port: int, sources: List[str], bpm: float):
         vendor = "AdvancedSceneSwitcher"
         vendor_msg = "AdvancedSceneSwitcherMessage"
         client.call_vendor_request(vendor, vendor_msg, {"message": f"BPM:{int(bpm)}"})
+        debug_print(f"vendor request sent: BPM:{int(bpm)}")
+        client.call_vendor_request(vendor, vendor_msg, {"message": f"RELAYBPM:{int(bpm)}"})
+        debug_print(f"vendor request sent: RELAYBPM:{int(bpm)}")
 
         for source in sources:
             try:
@@ -250,6 +286,13 @@ def parse_args() -> argparse.Namespace:
         help="Ask OBS to play BPM-matched source"
     )
 
+    parser.add_argument(
+        "--debug",
+        default=False,
+        action='store_true',
+        help="enable debug output"
+    )
+
     parsed_args = parser.parse_args()
 
     return parsed_args
@@ -257,6 +300,9 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
+
+    global debug
+    debug = args.debug
 
     # get_sources(args.host, args.port, "")
     # sys.exit(0)
