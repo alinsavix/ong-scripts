@@ -5,9 +5,11 @@ import json
 import os
 import sys
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from statistics import median
 from typing import Any, Dict, Iterable, List, Literal, Optional, TypeVar
 
 import mido
@@ -15,6 +17,10 @@ from tdvutil import ppretty
 from tdvutil.argparse import CheckFile
 
 MIDI_CLOCKS_PER_BEAT = 24
+
+# Sliding window BPM detection parameters
+NUM_SUB_WINDOWS = 4          # number of sub-windows for median filtering
+CONFIRM_BEATS = 4            # beats of consecutive stable readings before emitting a new BPM
 
 # Make timestamps match up with the onglog (unixes only, for some reason)
 if hasattr(time, "tzset"):
@@ -203,6 +209,13 @@ def parse_args() -> argparse.Namespace:
         help="List available MIDI devices"
     )
 
+    parser.add_argument(
+        "--debug",
+        default=False,
+        action='store_true',
+        help="Output intermediate BPM values during tempo transitions"
+    )
+
     return parser.parse_args()
 
 
@@ -252,8 +265,14 @@ def main() -> int:
 
     lstate = init_state(args.state_file)
 
-    clock_tick_count: int = 0
-    start_tick_time: float = 0.0
+    # Sliding window of tick timestamps for BPM calculation
+    ticks_per_window = MIDI_CLOCKS_PER_BEAT * args.sample_beats
+    ticks_per_sub = ticks_per_window // NUM_SUB_WINDOWS
+    # +1 because we need both endpoints to measure ticks_per_window intervals
+    tick_times: deque[float] = deque(maxlen=ticks_per_window + 1)
+    confirm_ticks_needed: int = CONFIRM_BEATS * MIDI_CLOCKS_PER_BEAT
+    confirm_counter: int = 0
+    last_candidate: float = 0.0
 
     # Fake clock timing, for testing of raw midi data captures
     fake_time_per_beat = 60 / args.fake_bpm
@@ -263,36 +282,59 @@ def main() -> int:
     for msg in midi:
         if msg.type == "clock":
             fake_time += fake_time_per_tick
-            # if lstate.playback_state == "STOPPED":
-            #     continue
-            if clock_tick_count == 0:
-                start_tick_time = now()
-            clock_tick_count += 1
+            tick_times.append(now())
 
-            # Not sure why the +1 is needed here, really
-            if clock_tick_count == (MIDI_CLOCKS_PER_BEAT * args.sample_beats) + 1:
-                # don't count a few ticks so we can make sure we're caught up
-                # from saving or whatever before starting again
-                clock_tick_count = -20
-                elapsed = now() - start_tick_time
-                time_per_beat = elapsed / args.sample_beats
-                new_bpm = round(60.0 / time_per_beat, 1)
+            if len(tick_times) < ticks_per_window + 1:
+                continue
 
-                # New bpm is less than a sane value, ignore it
-                if new_bpm < 10.0:
+            # Compute BPM for each sub-window independently, then
+            # take the median to reject outliers from jitter
+            sub_bpms = []
+            for i in range(NUM_SUB_WINDOWS):
+                t_start = tick_times[i * ticks_per_sub]
+                t_end = tick_times[(i + 1) * ticks_per_sub]
+                elapsed_sub = t_end - t_start
+                if elapsed_sub <= 0:
                     continue
+                beats = ticks_per_sub / MIDI_CLOCKS_PER_BEAT
+                sub_bpms.append(60.0 / (elapsed_sub / beats))
 
-                if lstate.current_bpm != new_bpm:
-                    lstate.current_bpm = new_bpm
+            if not sub_bpms:
+                continue
+
+            new_bpm = float(round(median(sub_bpms)))
+
+            # New bpm is less than a sane value, ignore it
+            if new_bpm < 10:
+                continue
+
+            # Only set a new BPM once readings have been stable for
+            # CONFIRM_BEATS beats
+            if new_bpm == last_candidate:
+                confirm_counter += 1
+                if args.debug and confirm_counter % MIDI_CLOCKS_PER_BEAT == 0:
+                    log(f"DEBUG BPM: {new_bpm} (confirming {confirm_counter // MIDI_CLOCKS_PER_BEAT}/{CONFIRM_BEATS} beats)")
+            else:
+                if args.debug:
+                    log(f"DEBUG BPM: {last_candidate} -> {new_bpm} (candidate changed)")
+                confirm_counter = 1
+                last_candidate = new_bpm
+
+            if confirm_counter >= confirm_ticks_needed:
+                if last_candidate != lstate.current_bpm:
+                    lstate.current_bpm = last_candidate
                     log(f"NEW BPM: {lstate.current_bpm:0.1f}")
                     save_state(args.state_file, lstate)
                     export_state(args.export_dir, lstate)
+                confirm_counter = 0
 
         elif msg.type == "program_change":
             # Changing to a new slot
             lstate.looper_slot = program_to_slot(msg.program)
             lstate.current_bpm = 0.0
-            clock_tick_count = -20
+            tick_times.clear()
+            confirm_counter = 0
+            last_candidate = 0.0
             log(f"SLOT CHANGE: {lstate.looper_slot}")
             save_state(args.state_file, lstate)
             export_state(args.export_dir, lstate)
@@ -302,7 +344,6 @@ def main() -> int:
                 log("START (ignored)")
             else:
                 lstate.playback_state = "STARTED"
-                clock_tick_count = -20
                 lstate.playback_start_time = now()
                 log("START")
                 save_state(args.state_file, lstate)
@@ -323,7 +364,6 @@ def main() -> int:
             sysex_str = " ".join([h(x) for x in group(msg.data[:-1], 2)])
             # log(f"SYSEX: {sysex_str}")
 
-            # if lstate.current_bpm > 0:
             loop_length = ((msg.data[8] & 0x0f) << 4) + (msg.data[9] & 0x0f)
 
             if lstate.current_bpm > 0:
@@ -341,8 +381,9 @@ def main() -> int:
 
                 # if existing loop length is 0, we probably just finished the
                 # first layer of a loop, so set as the playback start time.
-                if lstate.loop_length_bars == 0 and lstate.playback_state == "STARTED":
-                    lstate.playback_start_time = now()
+                # Probably don't actually need this, since we seem to get a START
+                # if lstate.loop_length_bars == 0 and lstate.playback_state == "STARTED":
+                #     lstate.playback_start_time = now()
 
             lstate.loop_length_bars = loop_length
             lstate.loop_length_secs = loop_length_s
