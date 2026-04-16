@@ -44,7 +44,9 @@ public class CPHInline
         if (CPH.TryGetArg("obsConnection", out string obsConnectionName))
         {
             connectionIdx = CPH.ObsGetConnectionByName(obsConnectionName);
-        } else {
+        }
+        else
+        {
             obsConnectionName = "(Default)";
         }
 

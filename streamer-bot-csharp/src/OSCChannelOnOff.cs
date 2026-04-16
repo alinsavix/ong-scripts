@@ -3,7 +3,7 @@ using SharpOSC;
 using System;
 
 #if EXTERNAL_EDITOR
-public class osc_chan_onoff : CPHInlineBase
+public class OSCChannelOnOff : CPHInlineBase
 #else
 public class CPHInline
 #endif

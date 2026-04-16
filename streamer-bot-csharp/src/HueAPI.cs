@@ -42,7 +42,6 @@ public class HueApi : CPHInlineBase
 public class CPHInline
 #endif
 {
-    // private const string HUE_BRIDGE_APP_KEY_PROPERTY = "integration.phillipsHue.bridge.appKey";
     private const string HUE_BRIDGE_APP_KEY_PROPERTY = "config.hue.apikey";
 
     private string hueHubIpAddress;
@@ -62,10 +61,13 @@ public class CPHInline
         else
         {
             DEBUG(() => "HUE BRIDGE APP KEY FOUND, CREATING CLIENT");
-            try {
+            try
+            {
                 hueClient = new LocalHueClient(hueHubIpAddress);
                 hueClient.Initialize(hueHubAppKey);
-            } catch (Exception e) {
+            }
+            catch (Exception e)
+            {
                 ERROR(() => $"Cannot initialize client for {hueHubIpAddress}: {e.Message}" +
                     (e.InnerException != null ? $"\nStackTrace: {e.InnerException.Message}" : "") + $"\n{e.StackTrace}"
                 );
@@ -175,11 +177,11 @@ public class CPHInline
 
         var totalTimeMs = CalculateTotalTransitionTimeMs(startColor, endColor, deltaERate);
 
-        INFO(() => $"Perceptual transition time calculation:" +
-             $"\n  Source color:      {startColor}" +
-             $"\n  Destination color: {endColor}" +
-             $"\n  Delta-E rate:      {deltaERate}/s" +
-             $"\n  Total time:        {totalTimeMs}ms");
+        INFO(() => $"Transition time calculation:" +
+             $" src {startColor}," +
+             $" dest {endColor}," +
+             $" delta-E rate {deltaERate}/s," +
+             $" transition time: {totalTimeMs}ms");
 
         CPH.SetArgument("hue.calculatedTransitionTimeMs", totalTimeMs);
         return true;
@@ -244,7 +246,7 @@ public class CPHInline
             {
                 DEBUG(() => "Updating color for group: " + group.Name);
                 var command = buildColorCommand(hexColor, saturation, brightness, transitionTimeMs);
-                INFO(() => $"Setting group values for group {groupId}: Hue {command.Hue}/{hexColor}, Saturation: {command.Saturation}, Brightness: {command.Brightness}");
+                INFO(() => $"Setting group values for group {groupId}: Hue {command.Hue}/{hexColor}, Time {transitionTimeMs}ms, Saturation: {command.Saturation}, Brightness: {command.Brightness}");
                 await hueClient.SendGroupCommandAsync(command, group.Id);
                 INFO(() => "Color updated to hex:" + hexColor + ", for group: " + group.Name);
             }
@@ -287,7 +289,8 @@ public class CPHInline
 
     private async Task printAllLights()
     {
-        try {
+        try
+        {
             var lights = await hueClient.GetLightsAsync();
             INFO(() => "");
             INFO(() => "LISTING ALL AVAILABLE HUE LIGHTS");
@@ -323,7 +326,9 @@ public class CPHInline
                 });
                 INFO(() => "=====================");
             }
-        } catch (Exception e) {
+        }
+        catch (Exception e)
+        {
             ERROR(() => $"Cannot get lights: {e.Message}" +
                 (e.InnerException != null ? $"\nStackTrace: {e.InnerException.Message}" : "") + $"\n{e.StackTrace}"
             );

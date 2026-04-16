@@ -196,12 +196,12 @@ public class CPHInline
 
     private void TriggerEventPaused()
     {
-        CPH.TriggerCodeEvent("subathon_paused", CreateArgsDictionary() );
+        CPH.TriggerCodeEvent("subathon_paused", CreateArgsDictionary());
     }
 
     private void TriggerEventResumed()
     {
-        CPH.TriggerCodeEvent("subathon_resumed", CreateArgsDictionary() );
+        CPH.TriggerCodeEvent("subathon_resumed", CreateArgsDictionary());
     }
 
     private void TriggerEventCancelled()
@@ -212,18 +212,18 @@ public class CPHInline
 
     private void TriggerEventTimeAdded(Dictionary<string, object> newArgs)
     {
-        CPH.TriggerCodeEvent("subathon_time_added", newArgs );
+        CPH.TriggerCodeEvent("subathon_time_added", newArgs);
     }
 
     private void TriggerEventLimitReached()
     {
-        CPH.TriggerCodeEvent("subathon_limit_reached", CreateArgsDictionary() );
+        CPH.TriggerCodeEvent("subathon_limit_reached", CreateArgsDictionary());
     }
 
     private void TriggerEventCompleted()
     {
         SubathonClear();
-        CPH.TriggerCodeEvent("subathon_completed", CreateArgsDictionary() );
+        CPH.TriggerCodeEvent("subathon_completed", CreateArgsDictionary());
     }
 
     public bool StartSubathon()
@@ -877,8 +877,8 @@ public class CPHInline
 
         subathonCancelConfirm = false;
         long originalSecondsToAdd = 0;
-        if ( !addTime &&
-             -secondsToAdd > subathonTimeRemaining )
+        if (!addTime &&
+             -secondsToAdd > subathonTimeRemaining)
         {
             string errorMessage = "You cannot remove more time than there is remaining";
             LogError($"{methodName}{errorMessage}");
@@ -891,7 +891,7 @@ public class CPHInline
         if (hypeTrain && addTime)
         {
             GetHypeTrainMultiplier(out double hypeTrainMultiplier);
-            long timeToAddMultiplied = (long) Math.Round(secondsToAdd * hypeTrainMultiplier);
+            long timeToAddMultiplied = (long)Math.Round(secondsToAdd * hypeTrainMultiplier);
             originalSecondsToAdd = secondsToAdd;
             subathonHypeTrainTimeAdded += originalSecondsToAdd;
             hypeTrainSecondsAdded = timeToAddMultiplied - secondsToAdd;
@@ -935,10 +935,10 @@ public class CPHInline
             timeToAddLong = "No time";
         }
 
-        if ( hypeTrain &&
+        if (hypeTrain &&
              addTime &&
              originalSecondsToAdd > 0 &&
-             hypeTrainSecondsAdded > 0 )
+             hypeTrainSecondsAdded > 0)
         {
             newArgs.Add("timeToAddShort", GetTimerStringShort(originalSecondsToAdd));
             newArgs.Add("timeToAddLong", GetTimerStringLong(originalSecondsToAdd));
