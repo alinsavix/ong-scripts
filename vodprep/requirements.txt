@@ -2,3 +2,7 @@ dateparser >= 1.1
 gspread ~= 5.9.0
 tdvutil >= 0.0.3
 Pillow ~= 9.2.0
+
+# for vodpublish
+google-api-python-client >= 2.0
+google-auth-oauthlib >= 1.0

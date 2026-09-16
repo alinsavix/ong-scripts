@@ -277,8 +277,6 @@ def gen_stream_info(args: argparse.Namespace, rows: List[List[str]]) -> Optional
     out.append(f"TITLE: {titlestr}")
 
     datestr = log_end_time.strftime("%Y-%m-%d")
-    out.append("")
-    out.append(f"Generating thumbnail for date: {datestr}")
 
     Path(f"{datestr}.txt").write_text("\n".join(out) + "\n", encoding="utf-8")
 

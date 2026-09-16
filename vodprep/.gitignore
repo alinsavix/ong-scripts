@@ -1,2 +1,7 @@
 [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].jpg
 last_processed_row.txt
+
+# youtube credentials and bookkeeping
+client_secret.json
+youtube_token.json
+youtube_videos.json
