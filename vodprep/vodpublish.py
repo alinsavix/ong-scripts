@@ -26,10 +26,9 @@ from tdvutil.argparse import CheckFile
 
 
 # We need to edit video metadata, set thumbnails, and add to playlists
-# which these scopes cover
+# which this scope covers
 SCOPES = [
     "https://www.googleapis.com/auth/youtube",
-    "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
 
 # Videos get uploaded by hand, and youtube names them after the file they came
